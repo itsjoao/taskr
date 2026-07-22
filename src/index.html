@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
+  <title>Task Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="chrome" id="chrome">
+      <div class="daynav">
+        <button class="sq" id="prev-day" title="Previous day (←)">&#9664;</button>
+        <button class="date-plate" id="date-plate" title="Back to today (T)">
+          <span class="date-main" id="date-main">0000-00-00</span>
+          <span class="date-sub" id="date-sub">---</span>
+        </button>
+        <button class="sq" id="next-day" title="Next day (→)">&#9654;</button>
+      </div>
+
+      <div class="drag-fill"></div>
+
+      <div class="fontctl">
+        <button class="sq" id="font-minus" title="Smaller text (Ctrl -)">A&minus;</button>
+        <button class="sq" id="font-plus" title="Larger text (Ctrl +)">A+</button>
+      </div>
+
+      <button class="tab tab-files" id="btn-files" title="Linked files (F)">&#9776;</button>
+      <button class="tab tab-io" id="btn-io" title="Export / import (Ctrl+E)">&#8943;</button>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab is-active" data-view="day">day</button>
+        <button class="tab" data-view="cal">cal</button>
+        <button class="tab" data-view="tpl">tmplt</button>
+      </nav>
+
+      <div class="wctl">
+        <button class="wbtn" id="win-min" title="Minimise" aria-label="Minimise">
+          <svg viewBox="0 0 12 12"><path d="M2.5 6.5 h7" /></svg>
+        </button>
+        <button class="wbtn" id="win-max" title="Maximise" aria-label="Maximise">
+          <svg viewBox="0 0 12 12" class="ico-max"><rect x="2.5" y="2.5" width="7" height="7" /></svg>
+          <svg viewBox="0 0 12 12" class="ico-restore"><path d="M2.5 4.5 h5 v5 h-5 z" /><path d="M4.5 4.5 v-2 h5 v5 h-2" /></svg>
+        </button>
+        <button class="wbtn wbtn-close" id="win-close" title="Close" aria-label="Close">
+          <svg viewBox="0 0 12 12"><path d="M3 3 L9 9 M9 3 L3 9" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="body">
+      <main id="view"></main>
+      <aside class="sidebar" id="sidebar" hidden></aside>
+    </div>
+
+    <footer class="meter" id="meter">
+      <div class="target">
+        <span class="meter-label">target</span>
+        <button class="hours-btn" id="target-minus" title="Less 0.5h">&minus;</button>
+        <span class="target-val" id="target-val">8</span><span class="target-unit">h</span>
+        <button class="hours-btn" id="target-plus" title="More 0.5h">+</button>
+      </div>
+      <div class="meter-track" id="meter-track"></div>
+      <div class="meter-total"><span id="meter-total">0</span><span class="unit">h</span></div>
+    </footer>
+  </div>
+
+  <div id="modal-root" class="modal-root" hidden></div>
+  <div id="toast" class="toast" aria-live="polite"></div>
+  <div id="tip" class="tip"></div>
+
+  <script src="store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
