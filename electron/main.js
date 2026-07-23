@@ -26,16 +26,15 @@ function ensureDirs() {
   fs.mkdirSync(notesDir(), { recursive: true })
 }
 
-// Installs from before the move kept their data under %APPDATA%, in a folder
-// named after the app of the day ("Task Tracker", then "taskr"). Bring the first
-// one we find across, leaving the original untouched as a fallback.
+// Installs from before the move kept their data under %APPDATA%. On the first
+// run in the new Documents home, bring that file across once, leaving the
+// original untouched as a fallback.
 function migrateLegacyData() {
   if (fs.existsSync(dataFile())) return // already have data in the new home
   const appData = app.getPath('appData')
   const candidates = [
     app.getPath('userData'), // %APPDATA%\taskr
-    path.join(appData, 'Task Tracker'),
-    path.join(appData, 'dxon-task-tracker')
+    path.join(appData, 'Task Tracker')
   ]
   for (const dir of candidates) {
     if (dir === dataDir()) continue

@@ -666,6 +666,18 @@ const Store = (() => {
     await flush()
   }
 
+  // Open work that will roll into a future day, shown there as a preview so a
+  // day ahead already reflects what carries over — without waiting for the clock
+  // or mutating today. Everything still open today (and any earlier open task)
+  // lands on the day being planned.
+  function wouldCarryInto(date) {
+    const t = today()
+    if (date <= t) return []
+    return state.tasks
+      .filter((k) => k.date <= t && !k.done && !k.carriedTo)
+      .sort((a, b) => a.order - b.order || a.createdDate.localeCompare(b.createdDate))
+  }
+
   /* ---------- search ---------- */
 
   // One query across everything the app knows: epics, tasks (title, response,
@@ -764,6 +776,7 @@ const Store = (() => {
     epicTaskSum,
     epicTotal,
     allLinks,
+    wouldCarryInto,
     search,
     taskById,
     epicById,

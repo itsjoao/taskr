@@ -41,6 +41,11 @@ o *daily*) reaparecem no dia seguinte como cópia nova, independentemente disso.
 a lista daquele dia, para você deixar tarefas e anotações prontas. Dias futuros que você
 abrir mas não preencher são descartados automaticamente, para não poluir o calendário.
 
+Ao abrir um dia futuro, as tarefas ainda **em aberto hoje aparecem já em cinza** (com
+`↷` e a etiqueta `carries over`), como prévia do que vai rolar para lá. É só uma
+visualização — não depende do relógio e não altera o dia de hoje; elas viram tarefas
+reais e editáveis quando o dia efetivamente chega.
+
 **Tarefa.** Cada uma tem checkbox, horas, um campo de **resposta** (`>` — o que foi feito
 e como) e um de **comentários** (`#` — extra, aberto pelo botão `#`). Uma tarefa arrastando
 há vários dias ganha o selo `↻3d`.
@@ -89,8 +94,16 @@ destaca a linha por um instante. `↑` `↓` navegam, `Enter` abre o primeiro, `
 **Notas (botão `▲ NOTES` no rodapé, ou `Ctrl+J`).** Abre uma gaveta para cima com um
 bloco de notas livre — **uma nota por dia**, salva como um `.txt` simples. Um navegador
 de dias (`◀ data ▶`) percorre as notas; o ponto laranja no botão indica que hoje já tem
-nota. **`take to today`** copia a nota do dia visto para a de hoje, anexando embaixo do
-que já houver (não sobrescreve). Salva sozinha enquanto você digita.
+nota. Salva sozinha enquanto você digita. Arraste a **alça no topo** da gaveta para
+aumentar ou diminuir a altura (fica salvo).
+
+Digite **`@`** para vincular uma tarefa: aparece uma lista das suas tarefas (mais
+recentes primeiro) e a escolhida vira uma **linha de cabeçalho** `@Título` na nota,
+destacada em negrito com uma régua embaixo. É texto puro no `.txt` — a linha começa
+com `@`.
+
+**Modo escuro (☾ no topo, ou `Ctrl+D`).** Alterna entre claro e escuro; fica salvo entre
+sessões. É o mesmo layout, num quase-preto quente.
 
 **Tamanho da fonte.** `A−` / `A+` no topo, ou `Ctrl` `+` / `−`. Fica salvo entre sessões.
 
@@ -129,6 +142,7 @@ Tarefas cujo épico não existe são ignoradas na mesclagem, para não criar ór
 | `Ctrl+N` | nova tarefa no épico atual |
 | `Ctrl+F` ou `/` | busca |
 | `Ctrl+J` | abre / fecha as notas |
+| `Ctrl+D` | modo claro / escuro |
 | `Ctrl+E` | exportar / importar |
 | `Ctrl` `+` / `−` / `0` | aumenta / diminui / reseta a fonte |
 | `Esc` | sai do campo em edição |

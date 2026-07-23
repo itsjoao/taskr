@@ -822,6 +822,22 @@ function renderTask(task, epic) {
   return node
 }
 
+// A read-only preview of a task that will carry into a future day. It is not a
+// stored task on this day — it becomes real (and editable) at the daily rollover.
+function carryGhost(task) {
+  const rolled = Store.daysBetween(task.createdDate, task.date)
+  return h('div', { class: 'task is-ghost' },
+    h('div', { class: 'task-line' },
+      h('span', { class: 'ghost-mark', title: `open on ${task.date} — carries over` }, '↷'),
+      h('span', { class: 'ghost-title' }, task.title || 'untitled'),
+      rolled >= 2 ? h('span', { class: 'badge badge-carried' }, `↻${rolled}d`) : null,
+      task.dueDate ? h('span', { class: 'due', style: 'pointer-events:none' }, `due ${task.dueDate.slice(5)}`) : null,
+      h('div', { class: 'leader' }),
+      h('span', { class: 'ghost-tag' }, 'carries over')
+    )
+  )
+}
+
 // Refresh the epic's total after task hours change, without a full re-render.
 function updateEpicHours(epicId) {
   const el = $view.querySelector(`[data-etotal="${CSS.escape(epicId)}"]`)
@@ -896,11 +912,22 @@ function renderDay() {
     return pane
   }
 
+  // On a future day, show the open work that will roll in — a live preview, so
+  // clicking ahead already reflects the carry-over. Grouped by epic below.
+  const carry = App.date > t ? Store.wouldCarryInto(App.date) : []
+  const carryByEpic = new Map()
+  for (const k of carry) {
+    if (!carryByEpic.has(k.epicId)) carryByEpic.set(k.epicId, [])
+    carryByEpic.get(k.epicId).push(k)
+  }
+
   if (App.date > t) {
     const ahead = Store.daysBetween(t, App.date)
     pane.append(
       h('div', { class: 'note' },
-        `planning — ${ahead} day(s) ahead. anything left open today still rolls over into this day`
+        carry.length
+          ? `planning — ${ahead} day(s) ahead. ${carry.length} open task(s) carry over from today (shown greyed); they become editable once the day arrives`
+          : `planning — ${ahead} day(s) ahead. nothing is open today, so nothing carries over yet`
       )
     )
   }
@@ -908,9 +935,10 @@ function renderDay() {
   let shown = 0
   epics.forEach((epic, i) => {
     const tasks = Store.tasksFor(epic.id, App.date)
+    const ghosts = carryByEpic.get(epic.id) || []
     // Past days only list what actually happened; today and future days show every
     // epic so tasks can be added to any of them.
-    if (!tasks.length && !editable) return
+    if (!tasks.length && !ghosts.length && !editable) return
     shown += 1
 
     const done = tasks.filter((k) => k.done).length
@@ -926,6 +954,7 @@ function renderDay() {
       )
     )
 
+    for (const ghost of ghosts) section.append(carryGhost(ghost))
     for (const task of tasks) section.append(renderTask(task, epic))
 
     if (editable) {
@@ -1177,7 +1206,8 @@ document.addEventListener('mousedown', (e) => {
 
 const Notes = (() => {
   const $drawer = document.getElementById('drawer')
-  const $in = document.getElementById('note-in')
+  const $grip = document.getElementById('drawer-grip')
+  const $in = document.getElementById('note-in') // a contenteditable div
   const $date = document.getElementById('note-date')
   const $dow = document.getElementById('note-dow')
   const $plate = document.getElementById('note-plate')
@@ -1185,14 +1215,20 @@ const Notes = (() => {
   const $path = document.getElementById('note-path')
   const $dot = document.getElementById('notes-dot')
   const $btn = document.getElementById('btn-notes')
+  const $pop = document.getElementById('note-mention')
 
   const SAVE_MS = 500
+  const H_KEY = 'tt.drawerH'
 
   let date = null
   let dirty = false
   let timer = null
   let dates = new Set()
   let dataDir = ''
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
+  // A header line is a task mention: "@" followed by a title.
+  const isHeader = (line) => /^@.*\S/.test(line)
 
   function setState(txt) {
     $state.textContent = txt
@@ -1212,17 +1248,97 @@ const Notes = (() => {
     $path.textContent = dataDir ? `${dataDir}\\notes\\${date}.txt` : ''
   }
 
-  async function load(d) {
-    await flush()
-    date = d
-    paintPlate()
-    const res = await window.api.notes.read(d)
-    $in.value = res.text || ''
-    dirty = false
-    setState(res.text ? '' : 'empty')
+  /* ---------- model <-> DOM ----------
+     The editor stays flat: one <div class="note-line"> per line, so reading and
+     caret math are exact. Structural edits (Enter, Backspace, paste, mentions)
+     go through the model as a plain string; plain typing is left to the browser
+     so accents and IME keep working. */
+
+  function makeLine(text) {
+    const div = h('div', { class: 'note-line' })
+    if (text === '') div.append(document.createElement('br'))
+    else {
+      div.textContent = text
+      if (isHeader(text)) div.classList.add('note-h')
+    }
+    return div
   }
 
-  function schedule() {
+  function renderText(text) {
+    $in.textContent = ''
+    for (const line of text.split('\n')) $in.append(makeLine(line))
+    if (!$in.children.length) $in.append(makeLine(''))
+    $in.classList.toggle('is-empty', text.trim() === '')
+  }
+
+  function serialize() {
+    return [...$in.children].map((c) => c.textContent).join('\n')
+  }
+
+  /* ---------- caret as an absolute character offset ---------- */
+
+  function currentBlock() {
+    const sel = getSelection()
+    if (!sel.rangeCount) return null
+    let block = sel.getRangeAt(0).endContainer
+    while (block && block.parentNode !== $in) block = block.parentNode
+    return block && block.parentNode === $in ? block : null
+  }
+
+  function getCaret() {
+    const sel = getSelection()
+    if (!sel.rangeCount) return null
+    const block = currentBlock()
+    if (!block) return null
+    const idx = [...$in.children].indexOf(block)
+    const r = sel.getRangeAt(0)
+    const pre = r.cloneRange()
+    pre.selectNodeContents(block)
+    pre.setEnd(r.endContainer, r.endOffset)
+    let abs = pre.toString().length
+    for (let i = 0; i < idx; i++) abs += $in.children[i].textContent.length + 1
+    return abs
+  }
+
+  function setCaret(abs) {
+    const kids = [...$in.children]
+    if (!kids.length) return
+    let rem = abs
+    for (const block of kids) {
+      const len = block.textContent.length
+      if (rem <= len) return placeCaret(block, rem)
+      rem -= len + 1
+    }
+    const last = kids[kids.length - 1]
+    placeCaret(last, last.textContent.length)
+  }
+
+  function placeCaret(block, off) {
+    const sel = getSelection()
+    const r = document.createRange()
+    const tn = [...block.childNodes].find((n) => n.nodeType === 3)
+    if (tn) r.setStart(tn, clamp(off, 0, tn.length))
+    else r.setStart(block, 0)
+    r.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(r)
+  }
+
+  const collapsed = () => {
+    const s = getSelection()
+    return s.rangeCount && s.getRangeAt(0).collapsed
+  }
+
+  // Rewrite the whole note from a string and drop the caret at a known offset.
+  function setModel(text, caret) {
+    renderText(text)
+    if (caret != null) setCaret(caret)
+    scheduleSave()
+  }
+
+  /* ---------- disk ---------- */
+
+  function scheduleSave() {
     dirty = true
     setState('…')
     clearTimeout(timer)
@@ -1234,7 +1350,7 @@ const Notes = (() => {
     timer = null
     if (!dirty || !date) return
     const target = date
-    const text = $in.value
+    const text = serialize()
     dirty = false
     const res = await window.api.notes.write(target, text)
     if (!res.ok) {
@@ -1248,20 +1364,225 @@ const Notes = (() => {
     if (date === target) setState('saved')
   }
 
+  /* ---------- editing ---------- */
+
+  function onInput() {
+    // A native edit that nested the DOM (paste, a selection delete) — flatten it.
+    if ([...$in.children].some((c) => c.querySelector && c.querySelector('div, p'))) {
+      setModel($in.innerText.replace(/\n$/, ''), null)
+    } else {
+      // keep the edited line's header styling live, without touching the caret
+      const block = currentBlock()
+      if (block) {
+        const t = block.textContent
+        block.classList.toggle('note-h', isHeader(t))
+        if (t === '' && !block.querySelector('br')) block.append(document.createElement('br'))
+      }
+      $in.classList.toggle('is-empty', serialize().trim() === '')
+      scheduleSave()
+    }
+    updateMention()
+  }
+
+  function onKeydown(e) {
+    if (!$pop.hidden) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveMention(1); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); moveMention(-1); return }
+      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); chooseMention(); return }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideMention(); return }
+    }
+
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return }
+    if (e.isComposing) return
+
+    if (e.key === 'Enter') {
+      if (!collapsed()) return // let the browser replace the selection; onInput flattens
+      e.preventDefault()
+      const c = getCaret()
+      const text = serialize()
+      setModel(text.slice(0, c) + '\n' + text.slice(c), c + 1)
+      updateMention()
+      return
+    }
+    if (e.key === 'Backspace' && collapsed()) {
+      const c = getCaret()
+      if (c > 0) {
+        e.preventDefault()
+        const text = serialize()
+        setModel(text.slice(0, c - 1) + text.slice(c), c - 1)
+        updateMention()
+      }
+      return
+    }
+    if (e.key === 'Delete' && collapsed()) {
+      const c = getCaret()
+      const text = serialize()
+      if (c < text.length) {
+        e.preventDefault()
+        setModel(text.slice(0, c) + text.slice(c + 1), c)
+        updateMention()
+      }
+    }
+  }
+
+  function onPaste(e) {
+    e.preventDefault()
+    const t = (e.clipboardData || window.clipboardData).getData('text/plain')
+    if (!t) return
+    if (!collapsed()) { document.execCommand('insertText', false, t); return }
+    const c = getCaret()
+    const text = serialize()
+    setModel(text.slice(0, c) + t + text.slice(c), c + t.length)
+    updateMention()
+  }
+
+  /* ---------- @ mention picker ---------- */
+
+  let mentionItems = []
+  let mentionIndex = 0
+  let mentionAt = 0 // string offset of the '@'
+
+  // Distinct task titles, most recent first, matching what was typed after '@'.
+  function mentionCandidates(q) {
+    const ql = q.trim().toLowerCase()
+    const seen = new Set()
+    const out = []
+    const src = [...Store.state.tasks]
+      .filter((t) => t.title.trim())
+      .sort((a, b) => b.date.localeCompare(a.date) || a.order - b.order)
+    for (const t of src) {
+      if (ql && !t.title.toLowerCase().includes(ql)) continue
+      const key = t.title.trim().toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(t)
+      if (out.length >= 8) break
+    }
+    return out
+  }
+
+  function updateMention() {
+    const c = getCaret()
+    if (c == null) return hideMention()
+    const before = serialize().slice(0, c)
+    const m = /@([^\n@]{0,40})$/.exec(before)
+    if (!m) return hideMention()
+    mentionAt = c - m[0].length
+    const cands = mentionCandidates(m[1])
+    if (!cands.length) return hideMention()
+    mentionItems = cands
+    mentionIndex = 0
+    paintMention()
+  }
+
+  function paintMention() {
+    $pop.textContent = ''
+    mentionItems.forEach((t, i) => {
+      const row = h('button', {
+        class: `sr${i === mentionIndex ? ' is-hl' : ''}`,
+        // mousedown, not click, so the editor never loses focus
+        onmousedown: (e) => { e.preventDefault(); mentionIndex = i; chooseMention() }
+      },
+        h('span', { class: 'sr-kind' }, t.date === Store.today() ? 'TODAY' : t.date.slice(5)),
+        h('span', { class: 'sr-main' }, t.title),
+        h('span', { class: 'sr-sub' }, Store.epicById(t.epicId)?.name || '')
+      )
+      $pop.append(row)
+    })
+
+    // anchor above the caret, since the drawer sits low on the screen
+    const rect = caretRect()
+    if (rect) {
+      $pop.hidden = false
+      const w = Math.min(360, window.innerWidth - 20)
+      $pop.style.width = w + 'px'
+      let left = clamp(rect.left, 10, window.innerWidth - w - 10)
+      $pop.style.left = left + 'px'
+      // measure, then decide above/below
+      $pop.style.top = '0px'
+      const ph = $pop.offsetHeight
+      let top = rect.top - ph - 6
+      if (top < 10) top = rect.bottom + 6
+      $pop.style.top = top + 'px'
+    }
+  }
+
+  function caretRect() {
+    const s = getSelection()
+    if (!s.rangeCount) return null
+    const r = s.getRangeAt(0).cloneRange()
+    r.collapse(true)
+    let rect = r.getBoundingClientRect()
+    if (!rect || (!rect.width && !rect.height)) {
+      const block = currentBlock()
+      if (block) rect = block.getBoundingClientRect()
+    }
+    return rect
+  }
+
+  function moveMention(dir) {
+    mentionIndex = (mentionIndex + dir + mentionItems.length) % mentionItems.length
+    paintMention()
+  }
+
+  function hideMention() {
+    $pop.hidden = true
+    mentionItems = []
+  }
+
+  // Drop the picked task in as its own header line: "@Title".
+  function chooseMention() {
+    const t = mentionItems[mentionIndex]
+    if (!t) return hideMention()
+    const c = getCaret()
+    const text = serialize()
+    const head = text.slice(0, mentionAt)
+    const tail = text.slice(c)
+    const line = '@' + t.title.trim()
+    const pre = head && !head.endsWith('\n') ? '\n' : ''
+    const post = tail && !tail.startsWith('\n') ? '\n' : ''
+    const caret = (head + pre + line).length
+    hideMention()
+    setModel(head + pre + line + post + tail, caret)
+    $in.focus()
+    setCaret(caret)
+  }
+
+  /* ---------- lifecycle ---------- */
+
+  async function load(d) {
+    await flush()
+    date = d
+    paintPlate()
+    hideMention()
+    const res = await window.api.notes.read(d)
+    renderText(res.text || '')
+    dirty = false
+    setState(res.text ? '' : 'empty')
+  }
+
+  function applyHeight() {
+    const saved = parseInt(localStorage.getItem(H_KEY), 10)
+    if (Number.isFinite(saved)) {
+      $drawer.style.height = clamp(saved, 160, window.innerHeight - 100) + 'px'
+    }
+  }
+
   async function open(d) {
+    applyHeight()
     $drawer.hidden = false
-    // one frame with the drawer laid out but still down, so the slide animates
     requestAnimationFrame(() => $drawer.classList.add('is-open'))
     $btn.classList.add('is-active')
     await load(d || date || App.date)
     $in.focus()
+    setCaret(serialize().length)
   }
 
   async function close() {
+    hideMention()
     await flush()
     $drawer.classList.remove('is-open')
     $btn.classList.remove('is-active')
-    // wait out the slide before pulling it from the layout
     setTimeout(() => {
       if (!$drawer.classList.contains('is-open')) $drawer.hidden = true
     }, 200)
@@ -1272,37 +1593,34 @@ const Notes = (() => {
     else open(App.date)
   }
 
-  // Carries this day's note into today's, appending under a dated rule rather
-  // than overwriting whatever is already there.
-  async function takeToToday() {
-    const t = Store.today()
-    const text = $in.value.trim()
-    if (!text) { toast('this note is empty'); return }
-    if (date === t) { toast('already on today'); return }
+  /* ---------- resize by dragging the top grip ---------- */
 
-    await flush()
-    const res = await window.api.notes.read(t)
-    const current = (res.text || '').trim()
-    const merged = current ? `${current}\n\n--- from ${date} ---\n${text}\n` : `${text}\n`
-    const w = await window.api.notes.write(t, merged)
-    if (!w.ok) { toast('could not write today’s note'); return }
-    dates.add(t)
-    await load(t)
-    setState('saved')
-    $dot.hidden = false
-    toast('note taken to today')
-  }
-
-  $in.addEventListener('input', schedule)
-  $in.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() }
+  $grip.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    const y0 = e.clientY
+    const h0 = $drawer.getBoundingClientRect().height
+    const move = (ev) => {
+      const height = clamp(h0 + (y0 - ev.clientY), 160, window.innerHeight - 100)
+      $drawer.style.height = height + 'px'
+    }
+    const up = () => {
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+      localStorage.setItem(H_KEY, String(parseInt($drawer.style.height, 10)))
+    }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
   })
+
+  $in.addEventListener('input', onInput)
+  $in.addEventListener('keydown', onKeydown)
+  $in.addEventListener('paste', onPaste)
+  $in.addEventListener('blur', () => setTimeout(hideMention, 120))
 
   document.getElementById('note-prev').onclick = () => load(Store.addDays(date, -1))
   document.getElementById('note-next').onclick = () => load(Store.addDays(date, 1))
   $plate.onclick = () => load(Store.today())
   document.getElementById('note-close').onclick = close
-  document.getElementById('note-to-today').onclick = takeToToday
   $btn.onclick = toggle
 
   return {
@@ -1680,6 +1998,30 @@ document.getElementById('chrome').addEventListener('dblclick', (e) => {
   window.api.win.toggleMaximize()
 })
 
+/* ---------- theme ---------- */
+
+const THEME_KEY = 'tt.theme'
+
+function applyTheme(theme) {
+  const dark = theme === 'dark'
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light')
+  const btn = document.getElementById('theme-toggle')
+  if (btn) btn.title = dark ? 'Light mode (Ctrl+D)' : 'Dark mode (Ctrl+D)'
+}
+
+function toggleTheme() {
+  const dark = document.documentElement.dataset.theme === 'dark'
+  applyTheme(dark ? 'light' : 'dark')
+  toast(dark ? 'light mode' : 'dark mode')
+}
+
+function restoreTheme() {
+  applyTheme(localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light')
+}
+
+document.getElementById('theme-toggle').onclick = toggleTheme
+
 /* ---------- zoom ---------- */
 
 const ZOOM_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8]
@@ -1718,6 +2060,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key.toLowerCase() === 'e') { e.preventDefault(); ioDialog(); return }
     if (e.key.toLowerCase() === 'f') { e.preventDefault(); openSearch(); return }
     if (e.key.toLowerCase() === 'j') { e.preventDefault(); Notes.toggle(); return }
+    if (e.key.toLowerCase() === 'd') { e.preventDefault(); toggleTheme(); return }
   }
 
   // ctrl+enter toggles the task the caret is inside
@@ -1856,6 +2199,7 @@ function installSafetyValve() {
 
 async function boot() {
   installSafetyValve()
+  restoreTheme()
   restoreZoom()
   const res = await Store.init()
   App.date = Store.today()
