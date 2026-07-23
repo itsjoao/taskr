@@ -122,6 +122,9 @@ const Store = (() => {
             dueDate: typeof k.dueDate === 'string' && k.dueDate ? k.dueDate : null,
             createdDate: typeof k.createdDate === 'string' ? k.createdDate : (k.date || t),
             fromTemplateId: k.fromTemplateId || null,
+            // a carried task leaves its original in place; these two link the pair
+            carriedFrom: typeof k.carriedFrom === 'string' ? k.carriedFrom : null,
+            carriedTo: typeof k.carriedTo === 'string' ? k.carriedTo : null,
             order: Number.isFinite(k.order) ? k.order : i,
             links: Array.isArray(k.links)
               ? k.links
@@ -150,8 +153,27 @@ const Store = (() => {
       dueDate: null,
       createdDate: date,
       fromTemplateId: item.id,
+      carriedFrom: null,
+      carriedTo: null,
       links: [],
       order: item.order
+    }
+  }
+
+  // A day that has passed is a record: it keeps every task exactly as it stood.
+  // Unfinished work reaches the new day as a fresh copy instead of being moved,
+  // so nothing ever disappears from the day it belonged to.
+  function carryCopy(task, date) {
+    return {
+      ...task,
+      id: uid('task'),
+      date,
+      hours: 0,
+      done: false,
+      doneDate: null,
+      carriedFrom: task.id,
+      carriedTo: null,
+      links: task.links.map((l) => ({ ...l }))
     }
   }
 
@@ -161,17 +183,15 @@ const Store = (() => {
     return m
   }
 
-  // Unfinished work always moves forward. A finished task moves too while it still
-  // has a deadline ahead, so it stays in sight (and its files stay reachable);
-  // once the deadline arrives it settles on that day.
-  function shouldCarry(task, targetDate) {
-    if (!task.done) return true
-    return !!task.dueDate && targetDate <= task.dueDate
+  // Unfinished work reaches the new day. A finished task never travels: it stays
+  // on the day it was completed, which is where it actually happened.
+  function shouldCarry(task) {
+    return !task.done && !task.carriedTo
   }
 
   // An untouched template task: generated but never engaged with. Safe to drop or replace.
   function isPlaceholder(task, tplMap) {
-    if (task.done || task.hours || !task.fromTemplateId) return false
+    if (task.done || task.hours || !task.fromTemplateId || task.carriedFrom) return false
     if (task.response.trim() || task.comments.trim()) return false
     const tpl = tplMap.get(task.fromTemplateId)
     return !!tpl && tpl.title === task.title
@@ -215,20 +235,21 @@ const Store = (() => {
     }
 
     const drop = new Set()
-    let migrated = 0
-    for (const task of state.tasks) {
-      if (task.date >= t || !shouldCarry(task, t)) continue
-      // a completed task riding its deadline must not consume today's fresh slot
-      if (!task.done) {
-        const slot = task.fromTemplateId && placeholders.get(task.fromTemplateId)
-        if (slot) {
-          drop.add(slot.id)
-          placeholders.delete(task.fromTemplateId)
-        }
+    const copies = []
+    // snapshot first: the copies land in state.tasks and must not be scanned again
+    const sources = state.tasks.filter((k) => k.date < t && shouldCarry(k))
+    for (const task of sources) {
+      const slot = task.fromTemplateId && placeholders.get(task.fromTemplateId)
+      if (slot) {
+        drop.add(slot.id)
+        placeholders.delete(task.fromTemplateId)
       }
-      task.date = t
-      migrated += 1
+      const copy = carryCopy(task, t)
+      task.carriedTo = copy.id
+      copies.push(copy)
     }
+    state.tasks.push(...copies)
+    const migrated = copies.length
     if (drop.size) state.tasks = state.tasks.filter((k) => !drop.has(k.id))
 
     const created = materializeDay(t)
@@ -363,6 +384,18 @@ const Store = (() => {
     }
   }
 
+  // every distinct file linked anywhere, newest task first
+  function allLinks() {
+    const seen = new Map()
+    for (const task of [...state.tasks].sort((a, b) => b.date.localeCompare(a.date))) {
+      for (const l of task.links) {
+        if (seen.has(l.path)) continue
+        seen.set(l.path, { ...l, epicId: task.epicId, taskTitle: task.title, date: task.date })
+      }
+    }
+    return [...seen.values()]
+  }
+
   function taskById(id) {
     return state.tasks.find((k) => k.id === id) || null
   }
@@ -394,8 +427,12 @@ const Store = (() => {
         return 'done'
       }
       task.doneDate = null
-      if (task.date < t) {
-        task.date = t
+      // Reopening something from a past day leaves that day's record alone and
+      // brings a fresh copy to today, the same way the daily carry works.
+      if (task.date < t && !task.carriedTo) {
+        const copy = carryCopy(task, t)
+        task.carriedTo = copy.id
+        s.tasks.push(copy)
         return 'pulled'
       }
       return 'open'
@@ -419,6 +456,8 @@ const Store = (() => {
         dueDate: null,
         createdDate: date,
         fromTemplateId: null,
+        carriedFrom: null,
+        carriedTo: null,
         links: [],
         order
       }
@@ -431,6 +470,9 @@ const Store = (() => {
     return commit((s) => {
       const i = s.tasks.findIndex((k) => k.id === id)
       if (i >= 0) s.tasks.splice(i, 1)
+      // the day it came from is open again, so it can carry forward once more
+      const source = s.tasks.find((k) => k.carriedTo === id)
+      if (source) source.carriedTo = null
     })
   }
 
@@ -573,7 +615,7 @@ const Store = (() => {
   // so re-importing the same file twice is a no-op.
   function importData(raw, mode) {
     if (!raw || typeof raw !== 'object' || !Array.isArray(raw.tasks) || !Array.isArray(raw.epics)) {
-      throw new Error('that file does not look like a Task Tracker backup')
+      throw new Error('that file does not look like a taskr backup')
     }
     const incoming = normalize(raw)
 
@@ -624,6 +666,55 @@ const Store = (() => {
     await flush()
   }
 
+  /* ---------- search ---------- */
+
+  // One query across everything the app knows: epics, tasks (title, response,
+  // comments) and linked files. Newest first, since recent work is what is
+  // usually being looked for.
+  function search(query, limit = 10) {
+    const q = String(query || '').trim().toLowerCase()
+    const empty = { query: q, epics: [], tasks: [], files: [], total: 0 }
+    if (q.length < 2) return empty
+
+    const hit = (s) => typeof s === 'string' && s.toLowerCase().includes(q)
+
+    const epics = state.epics
+      .filter((e) => hit(e.name))
+      .sort((a, b) => a.order - b.order)
+      .slice(0, limit)
+
+    const tasks = state.tasks
+      .filter((k) => hit(k.title) || hit(k.response) || hit(k.comments))
+      .sort((a, b) => b.date.localeCompare(a.date) || a.order - b.order)
+      .slice(0, limit)
+      .map((k) => {
+        const epic = epicById(k.epicId)
+        // show the line that actually matched, not just the title
+        const where = hit(k.title) ? null : hit(k.response) ? k.response : k.comments
+        const line = where
+          ? (where.split('\n').find((l) => hit(l)) || '').trim()
+          : ''
+        return { task: k, epicName: epic ? epic.name : '—', excerpt: line }
+      })
+
+    const files = []
+    const seenPaths = new Set()
+    for (const epic of epicsSorted()) {
+      if (epic.folder && hit(epic.folder) && !seenPaths.has(epic.folder)) {
+        seenPaths.add(epic.folder)
+        files.push({ path: epic.folder, name: epic.name, sub: 'epic folder', isFolder: true })
+      }
+    }
+    for (const l of allLinks()) {
+      if (files.length >= limit) break
+      if (seenPaths.has(l.path) || !(hit(l.name) || hit(l.path))) continue
+      seenPaths.add(l.path)
+      files.push({ path: l.path, name: l.name, sub: `${l.date} · ${l.taskTitle || 'untitled'}` })
+    }
+
+    return { query: q, epics, tasks, files, total: epics.length + tasks.length + files.length }
+  }
+
   // Public wrapper: run generation and persist if anything changed.
   function generateIfNeeded() {
     const result = runDailyGeneration()
@@ -672,17 +763,8 @@ const Store = (() => {
     setEpicExtra,
     epicTaskSum,
     epicTotal,
-    // every distinct file linked anywhere, newest task first
-    allLinks() {
-      const seen = new Map()
-      for (const task of [...state.tasks].sort((a, b) => b.date.localeCompare(a.date))) {
-        for (const l of task.links) {
-          if (seen.has(l.path)) continue
-          seen.set(l.path, { ...l, epicId: task.epicId, taskTitle: task.title, date: task.date })
-        }
-      }
-      return [...seen.values()]
-    },
+    allLinks,
+    search,
     taskById,
     epicById,
     // writes

@@ -1,11 +1,11 @@
-# Task Tracker
+# taskr
 
 Rastreador de tarefas diário, offline, para Windows. Cada dia é gerado a partir de um
 template editável, organizado por épicos (clientes/projetos).
 
 ## Instalar
 
-O instalador está em `dist/Task Tracker Setup 1.0.0.exe`. Ele cria atalho na área de
+O instalador fica em `dist/taskr Setup <versão>.exe`. Ele cria atalho na área de
 trabalho e permite escolher a pasta de instalação.
 
 Para rodar em modo desenvolvimento:
@@ -26,9 +26,16 @@ npm run dist
 ## Como funciona
 
 **Geração diária.** Ao abrir o app (ou à meia-noite, com ele aberto), a lista do dia é
-montada a partir do template. Tarefas não concluídas do dia anterior **migram** para o
-dia atual, levando junto resposta, comentários e horas já lançadas — não são duplicadas.
+montada a partir do template. Tarefas não concluídas do dia anterior **seguem** para o
+dia atual, levando junto o título, a resposta, os comentários e os arquivos vinculados.
 Se o app ficar dias fechado, tudo que estava aberto vem para o dia atual de uma vez.
+
+**O dia que passou fica exatamente como estava.** Nada é apagado do dia a que pertence:
+o registro de ontem mantém *todas* as tarefas — as concluídas e as que ficaram abertas.
+Uma tarefa em aberto não é *movida*, e sim **copiada** para o dia seguinte; a original
+permanece no seu dia, marcada com `↷`, como histórico. Uma tarefa concluída nunca viaja:
+fica no dia em que foi concluída, que é onde de fato aconteceu. Itens do template (como
+o *daily*) reaparecem no dia seguinte como cópia nova, independentemente disso.
 
 **Planejamento.** Navegar para um dia futuro (seta `→` ou clicando no calendário) já gera
 a lista daquele dia, para você deixar tarefas e anotações prontas. Dias futuros que você
@@ -58,15 +65,8 @@ São referências por caminho — o app não copia nem move nada. Mover ou renom
 arquivo depois quebra o vínculo, e ao clicar você recebe "caminho nao encontrado".
 
 **Prazos.** O botão `+ due` na tarefa define uma data. A etiqueta fica discreta se
-ainda falta tempo, preta no dia do prazo e **laranja quando atrasa**.
-
-Um prazo muda a regra de migração: uma tarefa **concluída** que ainda tem prazo pela
-frente continua aparecendo todo dia, já marcada, até chegar a data — assim ela não some
-de vista e o arquivo anexado continua a um clique. Ao chegar o prazo, ela para ali.
-Tarefa em aberto migra sempre, com ou sem prazo.
-
-Como ela é só um lembrete, ela **não ocupa a vaga do template**: se a tarefa vier do
-template, a cópia nova do dia é gerada do mesmo jeito, ao lado dela.
+ainda falta tempo, preta no dia do prazo e **laranja quando atrasa**. O prazo viaja
+junto com a tarefa enquanto ela continua em aberto.
 
 **Horas por épico.** No cabeçalho do épico há um campo `EPIC − 0 h +` para tempo que não
 pertence a nenhuma tarefa específica (reunião solta, suporte, deslocamento). Ele fica
@@ -80,6 +80,17 @@ não se perde. É por dia, não global.
 **Sidebar de arquivos.** O botão `☰` abre uma lateral com tudo que já foi vinculado,
 agrupado por épico: a pasta do épico e cada arquivo, com o dia e a tarefa de origem.
 Clique para abrir. Ela não navega no disco — só mostra o que você já vinculou.
+
+**Busca (⌖ no topo, ou `Ctrl+F` / `/`).** O botão de lupa desliza e vira um campo de
+busca. Procura de uma vez em **épicos, tarefas** (título, resposta e comentários) **e
+arquivos** vinculados. Cada resultado mostra onde está; clicar leva ao dia da tarefa e
+destaca a linha por um instante. `↑` `↓` navegam, `Enter` abre o primeiro, `Esc` fecha.
+
+**Notas (botão `▲ NOTES` no rodapé, ou `Ctrl+J`).** Abre uma gaveta para cima com um
+bloco de notas livre — **uma nota por dia**, salva como um `.txt` simples. Um navegador
+de dias (`◀ data ▶`) percorre as notas; o ponto laranja no botão indica que hoje já tem
+nota. **`take to today`** copia a nota do dia visto para a de hoje, anexando embaixo do
+que já houver (não sobrescreve). Salva sozinha enquanto você digita.
 
 **Tamanho da fonte.** `A−` / `A+` no topo, ou `Ctrl` `+` / `−`. Fica salvo entre sessões.
 
@@ -116,6 +127,8 @@ Tarefas cujo épico não existe são ignoradas na mesclagem, para não criar ór
 | `1` `2` `3` | day / cal / tmplt |
 | `Ctrl+Enter` | conclui a tarefa onde o cursor está |
 | `Ctrl+N` | nova tarefa no épico atual |
+| `Ctrl+F` ou `/` | busca |
+| `Ctrl+J` | abre / fecha as notas |
 | `Ctrl+E` | exportar / importar |
 | `Ctrl` `+` / `−` / `0` | aumenta / diminui / reseta a fonte |
 | `Esc` | sai do campo em edição |
@@ -123,21 +136,33 @@ Tarefas cujo épico não existe são ignoradas na mesclagem, para não criar ór
 
 ## Dados
 
-Tudo fica em `%APPDATA%\dxon-task-tracker\tracker-data.json`, gravado de forma atômica
-com um backup rotativo (`tracker-data.bak.json`). Se o arquivo principal for corrompido,
-o app recupera do backup e avisa. Nenhum dado sai da máquina.
+Tudo fica em `Documentos\taskr`, à vista:
+
+```
+Documentos\taskr\
+  tracker-data.json       todas as tarefas, épicos e template (gravação atômica)
+  tracker-data.bak.json   backup rotativo do último estado íntegro
+  notes\
+    2026-07-23.txt        uma nota por dia, texto puro
+    2026-07-24.txt
+```
+
+Se o `tracker-data.json` for corrompido, o app recupera do backup e avisa. Instalações
+anteriores guardavam os dados em `%APPDATA%\dxon-task-tracker`; ao abrir esta versão pela
+primeira vez, esse arquivo é copiado para `Documentos\taskr` automaticamente (o original
+fica onde estava, como segurança). Nenhum dado sai da máquina.
 
 **Os dados ficam fora do executável**, inclusive na versão portátil — o `.exe` só carrega
-o programa. Compartilhar o executável não compartilha nenhuma tarefa, resposta ou
-comentário seu. Para levar os dados de propósito, use o export json.
+o programa. Compartilhar o executável não compartilha nenhuma tarefa, nota ou comentário
+seu. Para levar os dados de propósito, use o export json (ou copie a pasta `taskr`).
 
 ## Estrutura
 
 ```
-electron/main.js      janela sem moldura, IPC, persistência atômica
-electron/preload.js   ponte segura (contextIsolation) para dados, janela e zoom
-src/store.js          modelo, geração diária, migração, planejamento futuro
-src/app.js            renderização das 3 views, atalhos, diálogos
+electron/main.js      janela sem moldura, IPC, persistência atômica, notas em disco
+electron/preload.js   ponte segura (contextIsolation) para dados, notas, janela e zoom
+src/store.js          modelo, geração diária, cópia entre dias, busca, planejamento
+src/app.js            renderização das 3 views, busca, gaveta de notas, atalhos
 src/styles.css        design system
 ```
 

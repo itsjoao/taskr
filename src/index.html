@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'" />
-  <title>Task Tracker</title>
+  <title>taskr</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -19,6 +19,20 @@
       </div>
 
       <div class="drag-fill"></div>
+
+      <div class="search" id="search">
+        <button class="tab tab-search" id="btn-search" title="Search everything (Ctrl+F)">&#9906;</button>
+        <input
+          class="search-in"
+          id="search-in"
+          type="text"
+          placeholder="epics, tasks, files"
+          spellcheck="false"
+          autocomplete="off"
+          tabindex="-1"
+        />
+        <button class="search-x" id="search-x" title="Close (Esc)" tabindex="-1">&#10005;</button>
+      </div>
 
       <div class="fontctl">
         <button class="sq" id="font-minus" title="Smaller text (Ctrl -)">A&minus;</button>
@@ -54,6 +68,12 @@
     </div>
 
     <footer class="meter" id="meter">
+      <button class="notes-btn" id="btn-notes" title="Notes (Ctrl+J)">
+        <span class="notes-caret">&#9650;</span>
+        <span>notes</span>
+        <span class="notes-dot" id="notes-dot" hidden></span>
+      </button>
+
       <div class="target">
         <span class="meter-label">target</span>
         <button class="hours-btn" id="target-minus" title="Less 0.5h">&minus;</button>
@@ -63,6 +83,38 @@
       <div class="meter-track" id="meter-track"></div>
       <div class="meter-total"><span id="meter-total">0</span><span class="unit">h</span></div>
     </footer>
+  </div>
+
+  <div id="search-panel" class="search-panel" hidden></div>
+
+  <div id="drawer" class="drawer" hidden>
+    <div class="drawer-bar">
+      <span class="drawer-title">notes</span>
+      <div class="daynav">
+        <button class="sq" id="note-prev" title="Previous day">&#9664;</button>
+        <button class="date-plate" id="note-plate" title="Go to today">
+          <span class="date-main" id="note-date">0000-00-00</span>
+          <span class="date-sub" id="note-dow">---</span>
+        </button>
+        <button class="sq" id="note-next" title="Next day">&#9654;</button>
+      </div>
+      <span class="cal-spacer"></span>
+      <button class="mbtn mbtn-sm" id="note-to-today" title="Copy this note into today's">
+        take to today
+      </button>
+      <button class="sq" id="note-close" title="Close (Esc)">&#10005;</button>
+    </div>
+    <textarea
+      class="drawer-in"
+      id="note-in"
+      spellcheck="false"
+      placeholder="one note per day — saved as a .txt in Documents\taskr\notes"
+    ></textarea>
+    <div class="drawer-foot">
+      <span id="note-path" class="drawer-path"></span>
+      <span class="cal-spacer"></span>
+      <span id="note-state" class="drawer-state"></span>
+    </div>
   </div>
 
   <div id="modal-root" class="modal-root" hidden></div>

@@ -1,7 +1,7 @@
 {
-  "name": "dxon-task-tracker",
-  "version": "1.0.0",
-  "description": "Daily task tracker with epics, editable template and calendar view",
+  "name": "taskr",
+  "version": "1.1.0",
+  "description": "Daily task tracker with epics, editable template, calendar view and per-day notes",
   "main": "electron/main.js",
   "author": "Joao Dxon",
   "license": "MIT",
@@ -15,8 +15,8 @@
     "electron-builder": "^25.1.8"
   },
   "build": {
-    "appId": "com.dxon.tasktracker",
-    "productName": "Task Tracker",
+    "appId": "com.dxon.taskr",
+    "productName": "taskr",
     "files": [
       "electron/**/*",
       "src/**/*"
@@ -33,15 +33,15 @@
       "icon": "build/icon.ico"
     },
     "portable": {
-      "artifactName": "TaskTracker-portable-${version}.exe",
-      "unpackDirName": "TaskTracker",
+      "artifactName": "taskr-portable-${version}.exe",
+      "unpackDirName": "taskr",
       "splashImage": null
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Task Tracker"
+      "shortcutName": "taskr"
     }
   }
 }

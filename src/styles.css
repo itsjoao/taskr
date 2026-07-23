@@ -13,6 +13,7 @@
   --ink-18: #cfccc4;
   --line: #111111;
   --hair: #d6d3cb;
+  --leader: rgba(17, 17, 17, 0.08);
   --accent: #ff4d00;
   --white: #fbfaf8;
 
@@ -463,15 +464,17 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 .title-in:focus { border-bottom-color: var(--accent); }
 .task.is-done .title-in { color: var(--ink-35); text-decoration: line-through; }
 
-/* dotted leader — the "index page" feel */
+/* dotted leader — the "index page" feel. Kept very faint: with one on every row
+   they read as texture, not as lines. */
 .leader {
   flex: 1 1 auto;
   min-width: 12px;
   height: 0;
   align-self: flex-end;
   margin: 0 4px 7px;
-  border-bottom: var(--hair-w) dotted var(--ink-18);
+  border-bottom: var(--hair-w) dotted var(--leader);
 }
+.task:hover .leader { border-bottom-color: var(--ink-18); }
 
 /* rollover badge */
 .badge {
@@ -1089,3 +1092,279 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
   white-space: nowrap;
 }
 .tip.is-on { opacity: 1; }
+
+/* ============================================================
+   SEARCH
+   ============================================================ */
+
+/* A button until it is needed: clicking slides a real field out of it. */
+.search {
+  display: flex;
+  align-items: center;
+  flex: none;
+  -webkit-app-region: no-drag;
+}
+
+.tab-search {
+  flex: none;
+  color: var(--ink-60);
+  padding: 4px 12px;
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0;
+  position: relative;
+  z-index: 1;
+}
+.tab-search:hover { background: var(--ink); color: var(--bg); }
+.search.is-open .tab-search { background: var(--ink); color: var(--bg); }
+
+.search-in {
+  width: 0;
+  opacity: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: transparent;
+  border: var(--hair-w) solid var(--line);
+  border-left: none;
+  border-radius: 0 var(--r) var(--r) 0;
+  border-width: 0;
+  outline: none;
+  user-select: text;
+  transition: width 140ms ease, opacity 100ms linear;
+}
+.search.is-open .search-in {
+  width: min(260px, 26vw);
+  opacity: 1;
+  padding: 4px 8px;
+  border-width: var(--hair-w);
+  border-left: none;
+}
+.search-in::placeholder { color: var(--ink-35); }
+
+.search-x {
+  display: none;
+  width: 22px;
+  height: 24px;
+  place-items: center;
+  font-size: 9px;
+  background: transparent;
+  border: var(--hair-w) solid var(--line);
+  border-left: none;
+  border-radius: 0 var(--r) var(--r) 0;
+  color: var(--ink-35);
+  cursor: pointer;
+  padding: 0;
+}
+.search.is-open .search-x { display: grid; }
+.search-x:hover { background: var(--accent); border-color: var(--accent); color: var(--white); }
+
+.search-panel {
+  position: fixed;
+  top: calc(var(--chrome-h) + 4px);
+  right: 14px;
+  width: min(520px, calc(100vw - 28px));
+  max-height: calc(100vh - var(--chrome-h) - var(--meter-h) - 20px);
+  overflow-y: auto;
+  background: var(--bg);
+  border: var(--hair-w) solid var(--line);
+  border-radius: var(--r);
+  z-index: 70;
+  padding: 4px 0 6px;
+}
+.search-panel[hidden] { display: none; }
+
+.sr-head {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+  padding: 6px 10px 3px;
+  border-bottom: var(--hair-w) solid var(--hair);
+  margin-bottom: 2px;
+}
+
+.sr {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  outline: none;
+}
+.sr:hover, .sr:focus { background: var(--panel); border-left-color: var(--accent); }
+
+.sr-kind {
+  flex: none;
+  min-width: 42px;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+  font-variant-numeric: tabular-nums;
+}
+.sr-main {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-sub {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-micro);
+  color: var(--ink-35);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.sr-empty {
+  padding: 10px;
+  font-size: var(--fs-label);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+}
+
+/* the row a search landed on, lit just long enough to find it */
+.task.is-hit, .epic.is-hit {
+  animation: hit 1.4s ease-out;
+  border-radius: var(--r);
+}
+@keyframes hit {
+  0%, 55% { background: rgba(255, 77, 0, 0.16); }
+  100% { background: transparent; }
+}
+
+/* ============================================================
+   NOTES DRAWER
+   ============================================================ */
+
+.notes-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  font-size: var(--fs-label);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-60);
+  background: transparent;
+  border: var(--hair-w) solid var(--line);
+  border-radius: var(--r);
+  cursor: pointer;
+  transition: background 60ms linear, color 60ms linear;
+}
+.notes-btn:hover { background: var(--ink); color: var(--bg); }
+.notes-btn.is-active { background: var(--ink); color: var(--bg); }
+.notes-caret { font-size: 7px; line-height: 1; }
+.notes-btn.is-active .notes-caret { transform: rotate(180deg); }
+
+/* a day with something written in it */
+.notes-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+.notes-dot[hidden] { display: none; }
+
+.drawer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--meter-h);
+  height: min(46vh, 420px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-top: var(--hair-w) solid var(--line);
+  transform: translateY(100%);
+  transition: transform 180ms ease;
+  z-index: 40;
+}
+.drawer.is-open { transform: translateY(0); }
+.drawer[hidden] { display: none; }
+
+.drawer-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: var(--hair-w) solid var(--hair);
+}
+.drawer-title {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+  flex: none;
+}
+.drawer-bar .date-main { font-size: 13px; }
+
+.mbtn-sm {
+  padding: 3px 10px;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.12em;
+}
+
+.drawer-in {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 10px 14px;
+  user-select: text;
+}
+.drawer-in::placeholder { color: var(--ink-35); }
+
+.drawer-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  padding: 4px 12px 6px;
+}
+.drawer-path,
+.drawer-state {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--ink-35);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drawer-state { flex: none; text-transform: uppercase; letter-spacing: 0.14em; }
+
+/* ============================================================
+   CARRIED TASKS — the past day's own record
+   ============================================================ */
+
+/* The work moved on to the next day; what stays here is history, so it sits
+   back a little without being hidden. */
+.task.is-carried .title-in { color: var(--ink-60); }
+.badge-carried {
+  border-color: var(--ink-18);
+  color: var(--ink-35);
+  padding: 0 5px;
+}

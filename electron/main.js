@@ -6,10 +6,50 @@ const isDev = !app.isPackaged
 
 let win = null
 
-const dataDir = () => app.getPath('userData')
+/* All data lives in Documents\taskr, in the open: a JSON with the tasks and one
+   plain .txt per day of notes. Nothing is hidden inside the app's userData. */
+function documentsDir() {
+  try {
+    return app.getPath('documents')
+  } catch (err) {
+    return app.getPath('userData')
+  }
+}
+
+const dataDir = () => path.join(documentsDir(), 'taskr')
+const notesDir = () => path.join(dataDir(), 'notes')
 const dataFile = () => path.join(dataDir(), 'tracker-data.json')
 const backupFile = () => path.join(dataDir(), 'tracker-data.bak.json')
 const tmpFile = () => path.join(dataDir(), 'tracker-data.tmp.json')
+
+function ensureDirs() {
+  fs.mkdirSync(notesDir(), { recursive: true })
+}
+
+// Installs from before the move keep their data under userData. Bring it across
+// once, leaving the original untouched as a fallback.
+function migrateLegacyData() {
+  const legacyDir = app.getPath('userData')
+  if (legacyDir === dataDir()) return
+  const pairs = [
+    [path.join(legacyDir, 'tracker-data.json'), dataFile()],
+    [path.join(legacyDir, 'tracker-data.bak.json'), backupFile()]
+  ]
+  for (const [from, to] of pairs) {
+    try {
+      if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to)
+    } catch (err) {
+      // a failed migration must not stop the app from starting
+    }
+  }
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+// The date comes from the renderer and becomes a file name — never trust it.
+const noteFile = (date) => {
+  if (!DATE_RE.test(String(date))) return null
+  return path.join(notesDir(), `${date}.txt`)
+}
 
 function readJson(file) {
   try {
@@ -34,6 +74,7 @@ function loadData() {
 
 function saveData(data) {
   const json = JSON.stringify(data, null, 2)
+  ensureDirs()
 
   // keep one rotating backup of the last known-good file
   try {
@@ -54,7 +95,8 @@ function createWindow() {
     minWidth: 720,
     minHeight: 520,
     backgroundColor: '#F4F2EE',
-    title: 'Task Tracker',
+    title: 'taskr',
+    icon: path.join(__dirname, '..', 'build', 'icon.ico'),
     frame: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -130,6 +172,51 @@ ipcMain.handle('data:save', (_evt, data) => {
 })
 
 ipcMain.handle('app:isDev', () => isDev)
+
+ipcMain.handle('app:dataDir', () => dataDir())
+
+/* ---------- notes: one .txt per day, inside Documents\taskr\notes ---------- */
+
+ipcMain.handle('notes:read', (_evt, date) => {
+  const file = noteFile(date)
+  if (!file) return { ok: false, text: '' }
+  try {
+    if (!fs.existsSync(file)) return { ok: true, text: '' }
+    return { ok: true, text: fs.readFileSync(file, 'utf8') }
+  } catch (err) {
+    return { ok: false, text: '', error: String(err.message || err) }
+  }
+})
+
+ipcMain.handle('notes:write', (_evt, { date, text }) => {
+  const file = noteFile(date)
+  if (!file) return { ok: false, error: 'bad date' }
+  try {
+    ensureDirs()
+    // an emptied note leaves no file behind
+    if (!String(text || '').trim()) {
+      if (fs.existsSync(file)) fs.unlinkSync(file)
+      return { ok: true, removed: true }
+    }
+    fs.writeFileSync(file, text, 'utf8')
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) }
+  }
+})
+
+ipcMain.handle('notes:dates', () => {
+  try {
+    if (!fs.existsSync(notesDir())) return []
+    return fs
+      .readdirSync(notesDir())
+      .filter((f) => f.endsWith('.txt') && DATE_RE.test(f.slice(0, -4)))
+      .map((f) => f.slice(0, -4))
+      .sort()
+  } catch (err) {
+    return []
+  }
+})
 
 /* ---------- native dialogs ----------
    Every dialog below is modal on the window, which disables it until dismissed.
@@ -279,6 +366,8 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
+    ensureDirs()
+    migrateLegacyData()
     createWindow()
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()

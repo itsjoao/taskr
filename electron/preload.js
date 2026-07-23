@@ -4,6 +4,13 @@ contextBridge.exposeInMainWorld('api', {
   loadData: () => ipcRenderer.invoke('data:load'),
   saveData: (data) => ipcRenderer.invoke('data:save', data),
   isDev: () => ipcRenderer.invoke('app:isDev'),
+  dataDir: () => ipcRenderer.invoke('app:dataDir'),
+
+  notes: {
+    read: (date) => ipcRenderer.invoke('notes:read', date),
+    write: (date, text) => ipcRenderer.invoke('notes:write', { date, text }),
+    dates: () => ipcRenderer.invoke('notes:dates')
+  },
 
   // main asks the renderer to flush pending edits before the app closes
   onFlush: (handler) => {

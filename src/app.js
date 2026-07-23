@@ -189,9 +189,9 @@ function buildExport(scope, format) {
 
 function exportName(scope, format) {
   const ext = format === 'json' ? 'json' : 'txt'
-  if (scope === 'day') return `tasktracker-${App.date}.${ext}`
-  if (scope === 'month') return `tasktracker-${App.calMonth}.${ext}`
-  return `tasktracker-backup.${ext}`
+  if (scope === 'day') return `taskr-${App.date}.${ext}`
+  if (scope === 'month') return `taskr-${App.calMonth}.${ext}`
+  return `taskr-backup.${ext}`
 }
 
 function optRow(options, current, onPick) {
@@ -704,6 +704,7 @@ function renderTask(task, epic) {
     class: [
       'task',
       task.done ? 'is-done' : '',
+      task.carriedTo ? 'is-carried' : '',
       (task.hours || 0) === 0 ? 'is-zero' : '',
       commentsOpen ? 'is-open' : ''
     ].filter(Boolean).join(' '),
@@ -758,6 +759,10 @@ function renderTask(task, epic) {
     check,
     title,
     rolled >= 2 ? h('span', { class: 'badge', title: `carried for ${rolled} days` }, `↻${rolled}d`) : null,
+    // this row is the record of a past day; the work itself went on to the next one
+    task.carriedTo
+      ? h('span', { class: 'badge badge-carried', title: 'unfinished — continued on the next day' }, '↷')
+      : null,
     h('div', { class: 'leader' }),
     dueField(task),
     hoursStepper(task, (v) => {
@@ -1004,6 +1009,315 @@ function renderSidebar() {
     $sidebar.append(h('div', { class: 'empty', style: 'margin-top:24px' }, 'nothing linked yet'))
   }
 }
+
+/* ============================================================
+   SEARCH — one field over epics, tasks and files
+   ============================================================ */
+
+const $search = document.getElementById('search')
+const $searchIn = document.getElementById('search-in')
+const $searchPanel = document.getElementById('search-panel')
+
+let searchTimer = null
+
+function openSearch() {
+  $search.classList.add('is-open')
+  $searchIn.tabIndex = 0
+  $searchIn.focus()
+  $searchIn.select()
+}
+
+function closeSearch() {
+  $search.classList.remove('is-open')
+  $searchIn.tabIndex = -1
+  $searchIn.value = ''
+  $searchPanel.hidden = true
+  $searchPanel.textContent = ''
+}
+
+// Lands on the day the task lives on and lights the row up for a moment,
+// so the eye finds it without hunting.
+function jumpToTask(task) {
+  closeSearch()
+  App.view = 'day'
+  goDate(task.date)
+  requestAnimationFrame(() => {
+    const row = $view.querySelector(`[data-task="${CSS.escape(task.id)}"]`)
+    if (!row) return
+    row.scrollIntoView({ block: 'center' })
+    row.classList.add('is-hit')
+    setTimeout(() => row.classList.remove('is-hit'), 1400)
+  })
+}
+
+function jumpToEpic(epic) {
+  closeSearch()
+  App.view = 'day'
+  render()
+  requestAnimationFrame(() => {
+    const heads = [...$view.querySelectorAll('.epic-name')]
+    const head = heads.find((n) => n.textContent === epic.name)
+    if (!head) return
+    head.scrollIntoView({ block: 'center' })
+    const section = head.closest('.epic')
+    if (!section) return
+    section.classList.add('is-hit')
+    setTimeout(() => section.classList.remove('is-hit'), 1400)
+  })
+}
+
+function resultRow(kind, label, sub, onPick) {
+  return h('button', { class: 'sr', onclick: onPick },
+    h('span', { class: 'sr-kind' }, kind),
+    h('span', { class: 'sr-main' }, label),
+    h('span', { class: 'sr-sub' }, sub || '')
+  )
+}
+
+function renderSearch() {
+  const q = $searchIn.value
+  const res = Store.search(q)
+
+  $searchPanel.textContent = ''
+
+  if (q.trim().length < 2) {
+    $searchPanel.hidden = true
+    return
+  }
+
+  if (!res.total) {
+    $searchPanel.append(h('div', { class: 'sr-empty' }, `nothing matches "${res.query}"`))
+    $searchPanel.hidden = false
+    return
+  }
+
+  if (res.epics.length) {
+    $searchPanel.append(h('div', { class: 'sr-head' }, 'epics'))
+    for (const epic of res.epics) {
+      $searchPanel.append(resultRow('EP', epic.name, '', () => jumpToEpic(epic)))
+    }
+  }
+
+  if (res.tasks.length) {
+    $searchPanel.append(h('div', { class: 'sr-head' }, 'tasks'))
+    for (const r of res.tasks) {
+      const marks = [r.task.done ? '✓' : '', r.task.carriedTo ? '↷' : ''].filter(Boolean).join(' ')
+      $searchPanel.append(
+        resultRow(
+          r.task.date === Store.today() ? 'TODAY' : r.task.date.slice(5),
+          r.task.title || 'untitled',
+          [r.epicName, r.excerpt, marks].filter(Boolean).join('  ·  '),
+          () => jumpToTask(r.task)
+        )
+      )
+    }
+  }
+
+  if (res.files.length) {
+    $searchPanel.append(h('div', { class: 'sr-head' }, 'files'))
+    for (const f of res.files) {
+      $searchPanel.append(
+        resultRow(f.isFolder ? 'DIR' : '@', f.name, f.sub, () => { closeSearch(); openTarget(f.path) })
+      )
+    }
+  }
+
+  $searchPanel.hidden = false
+}
+
+document.getElementById('btn-search').onclick = () => {
+  if ($search.classList.contains('is-open')) closeSearch()
+  else openSearch()
+}
+document.getElementById('search-x').onclick = closeSearch
+
+$searchIn.addEventListener('input', () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(renderSearch, 90)
+})
+
+$searchIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    closeSearch()
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    const first = $searchPanel.querySelector('.sr')
+    if (first) first.click()
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    const first = $searchPanel.querySelector('.sr')
+    if (first) first.focus()
+  }
+})
+
+// arrow keys walk the result list once it has focus
+$searchPanel.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Escape') return
+  e.preventDefault()
+  if (e.key === 'Escape') { closeSearch(); return }
+  const rows = [...$searchPanel.querySelectorAll('.sr')]
+  const i = rows.indexOf(document.activeElement)
+  const j = i + (e.key === 'ArrowDown' ? 1 : -1)
+  if (j < 0) $searchIn.focus()
+  else if (rows[j]) rows[j].focus()
+})
+
+// clicking anywhere else puts the search away
+document.addEventListener('mousedown', (e) => {
+  if (!$search.classList.contains('is-open')) return
+  if (e.target.closest('#search') || e.target.closest('#search-panel')) return
+  closeSearch()
+})
+
+/* ============================================================
+   NOTES DRAWER — one note per day, one .txt per day on disk
+   ============================================================ */
+
+const Notes = (() => {
+  const $drawer = document.getElementById('drawer')
+  const $in = document.getElementById('note-in')
+  const $date = document.getElementById('note-date')
+  const $dow = document.getElementById('note-dow')
+  const $plate = document.getElementById('note-plate')
+  const $state = document.getElementById('note-state')
+  const $path = document.getElementById('note-path')
+  const $dot = document.getElementById('notes-dot')
+  const $btn = document.getElementById('btn-notes')
+
+  const SAVE_MS = 500
+
+  let date = null
+  let dirty = false
+  let timer = null
+  let dates = new Set()
+  let dataDir = ''
+
+  function setState(txt) {
+    $state.textContent = txt
+  }
+
+  async function refreshDates() {
+    dates = new Set(await window.api.notes.dates())
+    $dot.hidden = !dates.has(Store.today())
+    paintPlate()
+  }
+
+  function paintPlate() {
+    if (!date) return
+    $date.textContent = date
+    $dow.textContent = DOW[Store.parse(date).getDay()]
+    $plate.classList.toggle('is-today', date === Store.today())
+    $path.textContent = dataDir ? `${dataDir}\\notes\\${date}.txt` : ''
+  }
+
+  async function load(d) {
+    await flush()
+    date = d
+    paintPlate()
+    const res = await window.api.notes.read(d)
+    $in.value = res.text || ''
+    dirty = false
+    setState(res.text ? '' : 'empty')
+  }
+
+  function schedule() {
+    dirty = true
+    setState('…')
+    clearTimeout(timer)
+    timer = setTimeout(flush, SAVE_MS)
+  }
+
+  async function flush() {
+    clearTimeout(timer)
+    timer = null
+    if (!dirty || !date) return
+    const target = date
+    const text = $in.value
+    dirty = false
+    const res = await window.api.notes.write(target, text)
+    if (!res.ok) {
+      setState('save failed')
+      toast('could not save the note: ' + (res.error || 'error'))
+      return
+    }
+    if (text.trim()) dates.add(target)
+    else dates.delete(target)
+    $dot.hidden = !dates.has(Store.today())
+    if (date === target) setState('saved')
+  }
+
+  async function open(d) {
+    $drawer.hidden = false
+    // one frame with the drawer laid out but still down, so the slide animates
+    requestAnimationFrame(() => $drawer.classList.add('is-open'))
+    $btn.classList.add('is-active')
+    await load(d || date || App.date)
+    $in.focus()
+  }
+
+  async function close() {
+    await flush()
+    $drawer.classList.remove('is-open')
+    $btn.classList.remove('is-active')
+    // wait out the slide before pulling it from the layout
+    setTimeout(() => {
+      if (!$drawer.classList.contains('is-open')) $drawer.hidden = true
+    }, 200)
+  }
+
+  function toggle() {
+    if ($drawer.classList.contains('is-open')) close()
+    else open(App.date)
+  }
+
+  // Carries this day's note into today's, appending under a dated rule rather
+  // than overwriting whatever is already there.
+  async function takeToToday() {
+    const t = Store.today()
+    const text = $in.value.trim()
+    if (!text) { toast('this note is empty'); return }
+    if (date === t) { toast('already on today'); return }
+
+    await flush()
+    const res = await window.api.notes.read(t)
+    const current = (res.text || '').trim()
+    const merged = current ? `${current}\n\n--- from ${date} ---\n${text}\n` : `${text}\n`
+    const w = await window.api.notes.write(t, merged)
+    if (!w.ok) { toast('could not write today’s note'); return }
+    dates.add(t)
+    await load(t)
+    setState('saved')
+    $dot.hidden = false
+    toast('note taken to today')
+  }
+
+  $in.addEventListener('input', schedule)
+  $in.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close() }
+  })
+
+  document.getElementById('note-prev').onclick = () => load(Store.addDays(date, -1))
+  document.getElementById('note-next').onclick = () => load(Store.addDays(date, 1))
+  $plate.onclick = () => load(Store.today())
+  document.getElementById('note-close').onclick = close
+  document.getElementById('note-to-today').onclick = takeToToday
+  $btn.onclick = toggle
+
+  return {
+    toggle,
+    close,
+    flush,
+    isOpen: () => $drawer.classList.contains('is-open'),
+    async boot() {
+      dataDir = await window.api.dataDir()
+      date = Store.today()
+      paintPlate()
+      await refreshDates()
+    }
+  }
+})()
 
 /* ============================================================
    CALENDAR VIEW
@@ -1402,6 +1716,8 @@ document.addEventListener('keydown', (e) => {
     if (e.key === '-' || e.key === '_') { e.preventDefault(); stepZoom(-1); return }
     if (e.key === '0') { e.preventDefault(); applyZoom(1); toast('zoom 100%'); return }
     if (e.key.toLowerCase() === 'e') { e.preventDefault(); ioDialog(); return }
+    if (e.key.toLowerCase() === 'f') { e.preventDefault(); openSearch(); return }
+    if (e.key.toLowerCase() === 'j') { e.preventDefault(); Notes.toggle(); return }
   }
 
   // ctrl+enter toggles the task the caret is inside
@@ -1448,7 +1764,8 @@ document.addEventListener('keydown', (e) => {
 
   if (typing || e.ctrlKey || e.metaKey || e.altKey) return
 
-  if (e.key === 'ArrowLeft') { e.preventDefault(); goDate(Store.addDays(App.date, -1)) }
+  if (e.key === '/') { e.preventDefault(); openSearch() }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); goDate(Store.addDays(App.date, -1)) }
   else if (e.key === 'ArrowRight') { e.preventDefault(); goDate(Store.addDays(App.date, 1)) }
   else if (e.key.toLowerCase() === 't') { goDate(Store.today()) }
   else if (e.key === '1') setView('day')
@@ -1549,9 +1866,13 @@ async function boot() {
   App.isDev = await window.api.isDev()
   if (App.isDev) installDevHelpers()
 
-  window.api.onFlush(() => Store.flush())
-  window.addEventListener('beforeunload', () => { Store.flush() })
+  window.api.onFlush(async () => {
+    await Notes.flush()
+    await Store.flush()
+  })
+  window.addEventListener('beforeunload', () => { Notes.flush(); Store.flush() })
 
+  await Notes.boot()
   render()
 
   if (res.recovered) toast('main file was corrupt — restored from the backup')
