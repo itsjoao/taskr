@@ -148,9 +148,9 @@ Documentos\taskr\
 ```
 
 Se o `tracker-data.json` for corrompido, o app recupera do backup e avisa. Instalações
-anteriores guardavam os dados em `%APPDATA%\dxon-task-tracker`; ao abrir esta versão pela
-primeira vez, esse arquivo é copiado para `Documentos\taskr` automaticamente (o original
-fica onde estava, como segurança). Nenhum dado sai da máquina.
+anteriores guardavam os dados em `%APPDATA%` (nas pastas `Task Tracker` ou `taskr`); ao
+abrir esta versão pela primeira vez, esse arquivo é copiado para `Documentos\taskr`
+automaticamente (o original fica onde estava, como segurança). Nenhum dado sai da máquina.
 
 **Os dados ficam fora do executável**, inclusive na versão portátil — o `.exe` só carrega
 o programa. Compartilhar o executável não compartilha nenhuma tarefa, nota ou comentário

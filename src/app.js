@@ -1,4 +1,4 @@
-/* Task Tracker — rendering and interaction. */
+/* taskr — rendering and interaction. */
 
 /* ---------- tiny DOM helper ---------- */
 

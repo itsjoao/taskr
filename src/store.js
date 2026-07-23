@@ -1,4 +1,4 @@
-/* Task Tracker — state, daily generation, persistence.
+/* taskr — state, daily generation, persistence.
    Plain global (no modules): file:// blocks ES module imports in Electron. */
 
 const Store = (() => {

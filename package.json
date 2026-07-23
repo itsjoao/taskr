@@ -1,7 +1,7 @@
 {
   "name": "taskr",
   "version": "1.1.0",
-  "description": "Daily task tracker with epics, editable template, calendar view and per-day notes",
+  "description": "taskr — daily tracker with epics, editable template, calendar view and per-day notes",
   "main": "electron/main.js",
   "author": "Joao Dxon",
   "license": "MIT",

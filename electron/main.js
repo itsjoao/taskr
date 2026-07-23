@@ -26,18 +26,26 @@ function ensureDirs() {
   fs.mkdirSync(notesDir(), { recursive: true })
 }
 
-// Installs from before the move keep their data under userData. Bring it across
-// once, leaving the original untouched as a fallback.
+// Installs from before the move kept their data under %APPDATA%, in a folder
+// named after the app of the day ("Task Tracker", then "taskr"). Bring the first
+// one we find across, leaving the original untouched as a fallback.
 function migrateLegacyData() {
-  const legacyDir = app.getPath('userData')
-  if (legacyDir === dataDir()) return
-  const pairs = [
-    [path.join(legacyDir, 'tracker-data.json'), dataFile()],
-    [path.join(legacyDir, 'tracker-data.bak.json'), backupFile()]
+  if (fs.existsSync(dataFile())) return // already have data in the new home
+  const appData = app.getPath('appData')
+  const candidates = [
+    app.getPath('userData'), // %APPDATA%\taskr
+    path.join(appData, 'Task Tracker'),
+    path.join(appData, 'dxon-task-tracker')
   ]
-  for (const [from, to] of pairs) {
+  for (const dir of candidates) {
+    if (dir === dataDir()) continue
+    const from = path.join(dir, 'tracker-data.json')
+    if (!fs.existsSync(from)) continue
     try {
-      if (fs.existsSync(from) && !fs.existsSync(to)) fs.copyFileSync(from, to)
+      fs.copyFileSync(from, dataFile())
+      const bak = path.join(dir, 'tracker-data.bak.json')
+      if (fs.existsSync(bak) && !fs.existsSync(backupFile())) fs.copyFileSync(bak, backupFile())
+      return
     } catch (err) {
       // a failed migration must not stop the app from starting
     }
