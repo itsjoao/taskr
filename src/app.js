@@ -27,12 +27,39 @@ function h(tag, attrs, ...kids) {
 const DOW = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
 const MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
-// num() feeds <input type=number>, which only accepts a dot.
-const num = (n) => String(+Number(n || 0).toFixed(2))
-// hh() is for display. Number inputs render the decimal separator of the host
-// locale, so read it from there rather than assuming one.
-const DECIMAL = (1.5).toLocaleString().replace(/\d/g, '')
-const hh = (n) => num(n).replace('.', DECIMAL || '.')
+/* ---------- time ----------
+   Hours live on disk as a decimal (0.25 = 15 min) so old files and JSON exports
+   stay valid. On screen they are always h:mm, and every control moves in
+   quarter-hour steps. */
+
+const QUARTER = 0.25
+
+const snapHours = (n) => Math.min(24, Math.max(0, Math.round((Number(n) || 0) * 4) / 4))
+
+// 1.25 -> "1:15". Rounded to the nearest minute, so a hand-edited 0.3 still reads.
+function hm(hours) {
+  const total = Math.round((Number(hours) || 0) * 60)
+  const sign = total < 0 ? '-' : ''
+  const abs = Math.abs(total)
+  return `${sign}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, '0')}`
+}
+
+// Accepts "1:15", "1.25", "1,25", "75m" and "2h" — and a bare number as hours,
+// which is what the field used to hold.
+function parseHM(str) {
+  const s = String(str == null ? '' : str).trim().toLowerCase().replace(',', '.')
+  if (!s) return 0
+  const clock = /^(\d+):(\d{1,2})$/.exec(s)
+  if (clock) return +clock[1] + +clock[2] / 60
+  const mins = /^(\d+(?:\.\d+)?)\s*m(?:in)?s?$/.exec(s)
+  if (mins) return +mins[1] / 60
+  const hrs = /^(\d+(?:\.\d+)?)\s*h(?:rs?)?$/.exec(s)
+  if (hrs) return +hrs[1]
+  const n = parseFloat(s)
+  return Number.isFinite(n) ? n : 0
+}
+
+const TIME_HINT = 'h:mm — type 1:15, 1.25, 75m or 2'
 
 /* ---------- app state ---------- */
 
@@ -40,10 +67,18 @@ const App = {
   view: 'day',
   date: null,
   calMonth: null, // 'YYYY-MM'
+  calWeek: null, // Monday of the week under review, 'YYYY-MM-DD'
   openComments: new Set(),
   editingDue: null, // task id whose deadline field is open
   showFiles: false,
   isDev: false
+}
+
+// The calendar follows the day being looked at: both the month grid and the
+// week under review re-anchor whenever the date moves.
+function syncCalTo(date) {
+  App.calMonth = date.slice(0, 7)
+  App.calWeek = Store.weekStart(date)
 }
 
 const $view = document.getElementById('view')
@@ -121,9 +156,14 @@ function confirmDialog({ title = 'confirm', body, confirmLabel = 'confirm', canc
    ============================================================ */
 
 // Dates covered by a scope, oldest first, skipping days with nothing on them.
+// Parked work belongs to no day, so it never appears in a dated export.
 function scopeDates(scope) {
-  const all = [...new Set(Store.state.tasks.map((k) => k.date))].sort()
+  const all = [...new Set(Store.state.tasks.filter((k) => !k.backlog).map((k) => k.date))].sort()
   if (scope === 'day') return all.filter((d) => d === App.date)
+  if (scope === 'week') {
+    const end = Store.addDays(App.calWeek, 6)
+    return all.filter((d) => d >= App.calWeek && d <= end)
+  }
   if (scope === 'month') return all.filter((d) => d.startsWith(App.calMonth))
   return all
 }
@@ -144,13 +184,13 @@ function dayToText(date) {
     const sum = tasks.reduce((s, k) => s + (k.hours || 0), 0)
     total += sum
     lines.push('')
-    lines.push(`${String(i + 1).padStart(2, '0')}  ${epic.name}  —  ${hh(sum)}h`)
+    lines.push(`${String(i + 1).padStart(2, '0')}  ${epic.name}  —  ${hm(sum)}h`)
 
     for (const task of tasks) {
       count += 1
       if (task.done) done += 1
       const box = task.done ? '[x]' : '[ ]'
-      const hrs = task.hours ? `  (${hh(task.hours)}h)` : ''
+      const hrs = task.hours ? `  (${hm(task.hours)}h)` : ''
       lines.push(`    ${box} ${task.title || 'untitled'}${hrs}`)
       for (const l of (task.response || '').split('\n')) {
         if (l.trim()) lines.push(`        > ${l}`)
@@ -167,7 +207,7 @@ function dayToText(date) {
   const target = Store.state.dayTargetHours || 8
   lines.push('')
   lines.push('-'.repeat(40))
-  lines.push(`TOTAL: ${hh(total)}h of ${hh(target)}h · ${done}/${count} completed`)
+  lines.push(`TOTAL: ${hm(total)}h of ${hm(target)}h · ${done}/${count} completed`)
   return lines.join('\n')
 }
 
@@ -190,6 +230,7 @@ function buildExport(scope, format) {
 function exportName(scope, format) {
   const ext = format === 'json' ? 'json' : 'txt'
   if (scope === 'day') return `taskr-${App.date}.${ext}`
+  if (scope === 'week') return `taskr-w${Store.isoWeek(App.calWeek)}-${App.calWeek}.${ext}`
   if (scope === 'month') return `taskr-${App.calMonth}.${ext}`
   return `taskr-backup.${ext}`
 }
@@ -227,8 +268,9 @@ function ioDialog() {
         optRow(
           [
             { value: 'day', label: `day ${App.date.slice(8)}/${App.date.slice(5, 7)}` },
+            { value: 'week', label: `week ${Store.isoWeek(App.calWeek)}` },
             { value: 'month', label: `month ${MON[+App.calMonth.slice(5, 7) - 1]}` },
-            { value: 'all', label: 'tudo' }
+            { value: 'all', label: 'all' }
           ],
           scope,
           (v) => { scope = v; paint() }
@@ -343,7 +385,7 @@ async function runImport(mode) {
   try {
     const stats = Store.importData(data, mode)
     App.date = Store.today()
-    App.calMonth = App.date.slice(0, 7)
+    syncCalTo(App.date)
     render()
     toast(
       mode === 'replace'
@@ -373,6 +415,72 @@ function bindTip(node, text) {
   })
   node.addEventListener('mouseleave', () => $tip.classList.remove('is-on'))
 }
+
+/* ---------- context menu ----------
+   Anything that points at a path carries one: opening the file is only half of
+   what you want from it — the other half is finding it on disk. */
+
+const $ctx = document.getElementById('ctx')
+
+function hideMenu() {
+  $ctx.hidden = true
+  $ctx.textContent = ''
+}
+
+// items: { label, onPick, danger }. A null entry draws a separator.
+function contextMenu(e, items) {
+  e.preventDefault()
+  e.stopPropagation()
+
+  $ctx.textContent = ''
+  for (const item of items) {
+    if (!item) {
+      $ctx.append(h('div', { class: 'ctx-sep' }))
+      continue
+    }
+    $ctx.append(
+      h('button', {
+        class: `ctx-item${item.danger ? ' is-danger' : ''}`,
+        onclick: () => { hideMenu(); item.onPick() }
+      }, item.label)
+    )
+  }
+
+  // show it before measuring, then pull it back inside the window
+  $ctx.hidden = false
+  $ctx.style.left = '0px'
+  $ctx.style.top = '0px'
+  $ctx.style.left = Math.max(4, Math.min(e.clientX, window.innerWidth - $ctx.offsetWidth - 8)) + 'px'
+  $ctx.style.top = Math.max(4, Math.min(e.clientY, window.innerHeight - $ctx.offsetHeight - 8)) + 'px'
+}
+
+// The entries every path shares. `extra` appends the ones that only make sense
+// for one kind of target — unlinking a file, re-picking an epic's folder.
+function pathMenu(e, path, extra = []) {
+  contextMenu(e, [
+    { label: 'open', onPick: () => openTarget(path) },
+    { label: 'reveal in explorer', onPick: () => revealTarget(path) },
+    {
+      label: 'copy path',
+      onPick: async () => { await window.api.io.copy(path); toast('path copied') }
+    },
+    ...(extra.length ? [null, ...extra] : [])
+  ])
+}
+
+// Plain click opens the item; ctrl+click shows it in Explorer instead.
+const openOrReveal = (path) => (e) =>
+  e.ctrlKey || e.metaKey ? revealTarget(path) : openTarget(path)
+
+document.addEventListener('mousedown', (e) => {
+  if (!$ctx.hidden && !e.target.closest('#ctx')) hideMenu()
+})
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$ctx.hidden) { e.stopPropagation(); hideMenu() }
+}, true)
+// the menu is anchored to a node any re-render or scroll can move out from under it
+document.addEventListener('scroll', hideMenu, true)
+window.addEventListener('blur', hideMenu)
 
 /* ---------- focus + scroll preservation across re-renders ---------- */
 
@@ -432,6 +540,18 @@ function epicTone(index) {
   return EPIC_TONES[index % EPIC_TONES.length]
 }
 
+// A block is filled only once its task is ticked. Hours booked on an open task
+// hold their place in the bar as an outline: the time is spoken for, but the
+// day has not banked it yet. Loose epic time has no task to complete, so it
+// counts as done the moment it is entered.
+function meterSeg(widthPct, tone, done) {
+  return h('div', {
+    class: `seg${done ? '' : ' is-open'}`,
+    style: `width: ${widthPct}%; flex: none; ` +
+      (done ? `background: ${tone}` : `background: none; box-shadow: inset 0 0 0 1px ${tone}`)
+  })
+}
+
 function renderMeter() {
   const epics = Store.epicsSorted()
   const target = Store.state.dayTargetHours || 8
@@ -439,16 +559,22 @@ function renderMeter() {
 
   const filled = []
   let total = 0
+  let banked = 0
 
   epics.forEach((epic, ei) => {
-    const blocks = Store.tasksFor(epic.id, App.date).filter((k) => (k.hours || 0) > 0)
+    const blocks = Store.tasksFor(epic.id, App.date)
+      .filter((k) => (k.hours || 0) > 0)
+      .map((k) => ({ hours: k.hours, title: k.title, done: k.done }))
     // loose epic time rides alongside the tasks rather than replacing them
     const extra = Store.epicExtra(epic.id, App.date)
-    if (extra > 0) blocks.unshift({ hours: extra, title: 'epic time', isExtra: true })
+    if (extra > 0) blocks.unshift({ hours: extra, title: 'epic time', done: true })
     if (!blocks.length) return
 
     filled.push({ epic, ei, tasks: blocks })
-    for (const b of blocks) total += b.hours
+    for (const b of blocks) {
+      total += b.hours
+      if (b.done) banked += b.hours
+    }
   })
 
   // The bar is scaled to the target; going over stretches it to the total instead,
@@ -462,45 +588,35 @@ function renderMeter() {
   filled.forEach(({ epic, ei, tasks }, gi) => {
     if (gi > 0) $meterTrack.append(h('div', { class: 'seg is-gap' }))
     for (const task of tasks) {
+      const tone = epicTone(ei)
+      const label = `${epic.name} / ${task.title || 'untitled'} / ${hm(task.hours)}h / ${task.done ? 'done' : 'open'}`
+
       // drop the target mark at the exact point the day tips over
       if (!markPlaced && acc + task.hours > target) {
         const before = target - acc
-        if (before > 0.001) {
-          $meterTrack.append(h('div', {
-            class: 'seg',
-            style: `width: ${pct(before)}%; flex: none; background: ${epicTone(ei)}`
-          }))
-        }
+        if (before > 0.001) $meterTrack.append(meterSeg(pct(before), tone, task.done))
         $meterTrack.append(h('div', { class: 'meter-mark' }))
-        const after = task.hours - Math.max(0, before)
-        const seg = h('div', {
-          class: 'seg',
-          style: `width: ${pct(after)}%; flex: none; background: ${epicTone(ei)}`
-        })
-        bindTip(seg, `${epic.name} / ${task.title || 'untitled'} / ${hh(task.hours)}h`)
+        const seg = meterSeg(pct(task.hours - Math.max(0, before)), tone, task.done)
+        bindTip(seg, label)
         $meterTrack.append(seg)
         markPlaced = true
-        acc += task.hours
-        continue
+      } else {
+        const seg = meterSeg(pct(task.hours), tone, task.done)
+        bindTip(seg, label)
+        $meterTrack.append(seg)
       }
-
-      const seg = h('div', {
-        class: 'seg',
-        style: `width: ${pct(task.hours)}%; flex: none; background: ${epicTone(ei)}`
-      })
-      bindTip(seg, `${epic.name} / ${task.title || 'untitled'} / ${hh(task.hours)}h`)
-      $meterTrack.append(seg)
       acc += task.hours
     }
   })
 
-  $meterTotal.textContent = hh(total)
+  $meterTotal.textContent = hm(total)
   $meterTotal.parentElement.classList.toggle('is-over', total > target)
   $meterTotal.parentElement.title =
-    total > target
-      ? `${hh(total - target)}h over the ${hh(target)}h target`
-      : `${hh(target - total)}h left to reach the ${hh(target)}h target`
-  document.getElementById('target-val').textContent = hh(target)
+    (total > target
+      ? `${hm(total - target)}h over the ${hm(target)}h target`
+      : `${hm(target - total)}h left to reach the ${hm(target)}h target`) +
+    `\n${hm(banked)}h of ${hm(total)}h completed — only completed work fills the bar`
+  document.getElementById('target-val').textContent = hm(target)
 }
 
 /* ============================================================
@@ -510,37 +626,38 @@ function renderMeter() {
 function hoursStepper(task, onChange) {
   const input = h('input', {
     class: 'hours-in',
-    type: 'number',
-    step: '0.5',
-    min: '0',
-    max: '24',
-    value: num(task.hours),
+    type: 'text',
+    inputmode: 'numeric',
+    value: hm(task.hours),
+    title: TIME_HINT,
     'data-fk': `hours:${task.id}`,
-    oninput: (e) => {
-      const v = parseFloat(e.target.value)
-      onChange(Number.isFinite(v) ? Math.min(24, Math.max(0, v)) : 0)
-    },
+    onfocus: (e) => e.target.select(),
+    oninput: (e) => onChange(snapHours(parseHM(e.target.value))),
     onblur: (e) => {
-      const v = parseFloat(e.target.value)
-      const clean = Number.isFinite(v) ? Math.min(24, Math.max(0, Math.round(v * 4) / 4)) : 0
-      e.target.value = num(clean)
+      const clean = snapHours(parseHM(e.target.value))
+      e.target.value = hm(clean)
       onChange(clean)
+    },
+    // a text field has no spinner of its own, so give the arrows the same job
+    onkeydown: (e) => {
+      if (e.key === 'ArrowUp') { e.preventDefault(); bump(QUARTER) }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); bump(-QUARTER) }
     }
   })
 
   const bump = (delta) => {
-    const v = Math.min(24, Math.max(0, (parseFloat(input.value) || 0) + delta))
-    input.value = num(v)
+    const v = snapHours(parseHM(input.value) + delta)
+    input.value = hm(v)
     onChange(v)
   }
 
   return h(
     'div',
     { class: 'hours' },
-    h('button', { class: 'hours-btn', title: 'Less 0.5h', onclick: () => bump(-0.5) }, '−'),
+    h('button', { class: 'hours-btn', title: 'Less 15 min', onclick: () => bump(-QUARTER) }, '−'),
     input,
     h('span', { class: 'hours-unit' }, 'h'),
-    h('button', { class: 'hours-btn', title: 'More 0.5h', onclick: () => bump(0.5) }, '+')
+    h('button', { class: 'hours-btn', title: 'More 15 min', onclick: () => bump(QUARTER) }, '+')
   )
 }
 
@@ -575,6 +692,12 @@ async function openTarget(target) {
   if (!res.ok) toast('could not open: ' + (res.error || 'error'))
 }
 
+// Opens Explorer with the item already selected, rather than opening the item.
+async function revealTarget(target) {
+  const res = await window.api.link.reveal(target)
+  if (!res.ok) toast('could not reveal: ' + (res.error || 'error'))
+}
+
 // Compact display path: last two segments are enough to recognise a folder.
 function shortPath(p) {
   const parts = p.split(/[\\/]/).filter(Boolean)
@@ -603,9 +726,17 @@ function epicFolderButton(epic) {
   }
   const btn = h('button', {
     class: 'folder-btn',
-    onclick: () => openTarget(epic.folder)
+    onclick: openOrReveal(epic.folder),
+    oncontextmenu: (e) => pathMenu(e, epic.folder, [
+      { label: 'change folder…', onPick: () => pickEpicFolder(epic.id) },
+      {
+        label: 'unlink folder',
+        danger: true,
+        onPick: () => { Store.updateEpic(epic.id, { folder: null }); render() }
+      }
+    ])
   }, '▸', h('span', { class: 'folder-path' }, shortPath(epic.folder)))
-  bindTip(btn, `abrir ${epic.folder}`)
+  bindTip(btn, `${epic.folder} · ctrl+click reveals · right-click for more`)
   return btn
 }
 
@@ -613,19 +744,22 @@ function linksRow(task) {
   if (!task.links.length) return null
   const row = h('div', { class: 'links' })
   for (const link of task.links) {
-    const chip = h('span', { class: 'chip', onclick: () => openTarget(link.path) },
+    const unlink = () => { Store.removeTaskLink(task.id, link.path); render() }
+    const chip = h('span', {
+      class: 'chip',
+      onclick: openOrReveal(link.path),
+      oncontextmenu: (e) => pathMenu(e, link.path, [
+        { label: 'unlink', danger: true, onPick: unlink }
+      ])
+    },
       h('span', { class: 'chip-name' }, link.name),
       h('button', {
         class: 'chip-x',
         title: 'Unlink',
-        onclick: (e) => {
-          e.stopPropagation()
-          Store.removeTaskLink(task.id, link.path)
-          render()
-        }
+        onclick: (e) => { e.stopPropagation(); unlink() }
       }, '✕')
     )
-    bindTip(chip, link.path)
+    bindTip(chip, `${link.path} · ctrl+click reveals · right-click for more`)
     row.append(chip)
   }
   return row
@@ -781,6 +915,14 @@ function renderTask(task, epic) {
         title: 'Link a file',
         onclick: () => attachFiles(task.id)
       }, '@'),
+      // real work, just not today's — park it instead of carrying it forever
+      App.date >= t && !task.done && !task.carriedTo
+        ? h('button', {
+            class: 'act',
+            title: 'Move to backlog',
+            onclick: () => { Store.moveToBacklog(task.id); render(); toast('moved to backlog') }
+          }, '⇩')
+        : null,
       h('button', {
         class: 'act',
         title: 'Move up',
@@ -842,7 +984,7 @@ function carryGhost(task) {
 function updateEpicHours(epicId) {
   const el = $view.querySelector(`[data-etotal="${CSS.escape(epicId)}"]`)
   if (!el) return
-  el.textContent = hh(Store.epicTotal(epicId, App.date))
+  el.textContent = hm(Store.epicTotal(epicId, App.date))
 }
 
 // Two numbers: loose time booked on the epic, and the epic's grand total.
@@ -850,44 +992,46 @@ function updateEpicHours(epicId) {
 function epicHoursControl(epic) {
   const extra = Store.epicExtra(epic.id, App.date)
 
-  const totalEl = h('b', { 'data-etotal': epic.id }, hh(Store.epicTotal(epic.id, App.date)))
+  const totalEl = h('b', { 'data-etotal': epic.id }, hm(Store.epicTotal(epic.id, App.date)))
 
   const sync = () => {
-    totalEl.textContent = hh(Store.epicTotal(epic.id, App.date))
+    totalEl.textContent = hm(Store.epicTotal(epic.id, App.date))
     renderMeter()
+  }
+
+  const apply = (hours) => {
+    const v = Store.setEpicExtra(epic.id, App.date, hours)
+    wrap.classList.toggle('has-extra', v > 0)
+    sync()
+    return v
   }
 
   const input = h('input', {
     class: 'epic-hours-in',
-    type: 'number',
-    step: '0.5',
-    min: '0',
-    max: '24',
-    value: num(extra),
+    type: 'text',
+    inputmode: 'numeric',
+    value: hm(extra),
     'data-fk': `ehours:${epic.id}`,
-    title: 'hours booked on the epic itself, for work that belongs to no single task',
-    oninput: (e) => {
-      const v = parseFloat(e.target.value)
-      Store.setEpicExtra(epic.id, App.date, Number.isFinite(v) ? v : 0)
-      wrap.classList.toggle('has-extra', (parseFloat(e.target.value) || 0) > 0)
-      sync()
+    title: `hours booked on the epic itself, for work that belongs to no single task\n${TIME_HINT}`,
+    onfocus: (e) => e.target.select(),
+    oninput: (e) => apply(parseHM(e.target.value)),
+    onblur: (e) => { e.target.value = hm(apply(parseHM(e.target.value))) },
+    onkeydown: (e) => {
+      if (e.key === 'ArrowUp') { e.preventDefault(); bump(QUARTER) }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); bump(-QUARTER) }
     }
   })
 
   const bump = (delta) => {
-    const v = Math.min(24, Math.max(0, (parseFloat(input.value) || 0) + delta))
-    input.value = num(v)
-    Store.setEpicExtra(epic.id, App.date, v)
-    wrap.classList.toggle('has-extra', v > 0)
-    sync()
+    input.value = hm(apply(snapHours(parseHM(input.value) + delta)))
   }
 
   const wrap = h('div', { class: `epic-extra${extra > 0 ? ' has-extra' : ''}` },
     h('span', { class: 'epic-extra-label' }, 'epic'),
-    h('button', { class: 'hours-btn', title: 'Less 0.5h', onclick: () => bump(-0.5) }, '−'),
+    h('button', { class: 'hours-btn', title: 'Less 15 min', onclick: () => bump(-QUARTER) }, '−'),
     input,
     h('span', { class: 'hours-unit' }, 'h'),
-    h('button', { class: 'hours-btn', title: 'More 0.5h', onclick: () => bump(0.5) }, '+')
+    h('button', { class: 'hours-btn', title: 'More 15 min', onclick: () => bump(QUARTER) }, '+')
   )
   bindTip(wrap, 'time on the epic itself — task hours are added on top')
 
@@ -897,13 +1041,134 @@ function epicHoursControl(epic) {
   )
 }
 
+/* ---------- backlog ---------- */
+
+// Parked work: real, filed under its epic, but not on any day. It shows the
+// epic it belongs to as a tag rather than living inside that epic's section,
+// because the whole list stays together at the bottom of the day.
+function renderBacklogTask(task, index, count) {
+  const epic = Store.epicById(task.epicId)
+
+  const title = h('input', {
+    class: 'title-in',
+    type: 'text',
+    value: task.title,
+    placeholder: 'untitled',
+    'data-fk': `title:${task.id}`,
+    size: Math.max(8, (task.title || 'untitled').length + 1),
+    oninput: (e) => {
+      e.target.size = Math.max(8, e.target.value.length + 1)
+      Store.commit((s) => {
+        const k = s.tasks.find((x) => x.id === task.id)
+        if (k) k.title = e.target.value
+      }, { silent: true })
+    }
+  })
+
+  const pull = h('button', {
+    class: 'act',
+    title: `Bring onto ${App.date}`,
+    onclick: () => {
+      Store.restoreFromBacklog(task.id, App.date)
+      render()
+      toast('back on the day')
+    }
+  }, '↑')
+  bindTip(pull, `schedule this on ${App.date}`)
+
+  const node = h('div', { class: 'task is-backlog', 'data-task': task.id },
+    h('div', { class: 'task-line' },
+      h('span', { class: 'bklg-mark' }, '·'),
+      h('span', { class: 'bklg-epic' }, epic ? epic.name : '—'),
+      title,
+      h('div', { class: 'leader' }),
+      dueField(task),
+      h('div', { class: 'acts' },
+        h('button', {
+          class: `act${task.links.length ? ' has-content' : ''}`,
+          title: 'Link a file',
+          onclick: () => attachFiles(task.id)
+        }, '@'),
+        pull,
+        h('button', {
+          class: 'act',
+          title: 'Move up',
+          disabled: index === 0,
+          onclick: () => { Store.moveBacklogTask(task.id, -1); render() }
+        }, '▲'),
+        h('button', {
+          class: 'act',
+          title: 'Move down',
+          disabled: index === count - 1,
+          onclick: () => { Store.moveBacklogTask(task.id, 1); render() }
+        }, '▼'),
+        h('button', {
+          class: 'act act-danger',
+          title: 'Delete task',
+          onclick: async () => {
+            const ok = await confirmDialog({
+              title: 'delete task',
+              body: `"${task.title.trim() || 'untitled'}" will be removed from the backlog.\nThis cannot be undone.`,
+              confirmLabel: 'delete',
+              danger: true
+            })
+            if (ok) { Store.removeTask(task.id); render() }
+          }
+        }, '✕')
+      )
+    )
+  )
+
+  const links = linksRow(task)
+  if (links) node.append(links)
+  return node
+}
+
+function backlogSection() {
+  const tasks = Store.backlogTasks()
+
+  const section = h('section', { class: 'epic epic-backlog' },
+    h('div', { class: 'epic-head' },
+      h('span', { class: 'epic-idx' }, '··'),
+      h('span', { class: 'epic-name' }, 'BACKLOG'),
+      h('span', { class: 'epic-rule' }),
+      h('span', { class: 'epic-count' }, tasks.length ? String(tasks.length) : '')
+    )
+  )
+
+  if (!tasks.length) {
+    section.append(
+      h('div', { class: 'bklg-empty' }, 'nothing parked — ⇩ on a task moves it here')
+    )
+    return section
+  }
+
+  tasks.forEach((task, i) => section.append(renderBacklogTask(task, i, tasks.length)))
+  return section
+}
+
+/* ---------- day ---------- */
+
+// Epics that hold work on this day come first: an empty epic is a place to put
+// something, not something to read past. Inside each group the saved order still
+// decides, so the ▲ ▼ below stay meaningful.
+function epicsForDay(date, carryByEpic) {
+  const hasWork = (epic) =>
+    Store.tasksFor(epic.id, date).length > 0 ||
+    (carryByEpic.get(epic.id) || []).length > 0 ||
+    Store.epicExtra(epic.id, date) > 0
+
+  return Store.epicsSorted()
+    .map((epic) => ({ epic, busy: hasWork(epic) }))
+    .sort((a, b) => (b.busy ? 1 : 0) - (a.busy ? 1 : 0))
+}
+
 function renderDay() {
   const t = Store.today()
   const pane = h('div', { class: 'pane' })
-  const epics = Store.epicsSorted()
   const editable = App.date >= t
 
-  if (!epics.length) {
+  if (!Store.epicsSorted().length) {
     pane.append(h('div', { class: 'empty' }, 'no epics — create one in the tmplt tab'))
     return pane
   }
@@ -932,8 +1197,10 @@ function renderDay() {
     )
   }
 
+  const ordered = epicsForDay(App.date, carryByEpic)
+
   let shown = 0
-  epics.forEach((epic, i) => {
+  ordered.forEach(({ epic, busy }, i) => {
     const tasks = Store.tasksFor(epic.id, App.date)
     const ghosts = carryByEpic.get(epic.id) || []
     // Past days only list what actually happened; today and future days show every
@@ -943,6 +1210,20 @@ function renderDay() {
 
     const done = tasks.filter((k) => k.done).length
 
+    // ▲ ▼ swap with the neighbour inside the same group. Across the boundary the
+    // float would immediately undo the move, so the button is simply off there.
+    const move = (dir) => {
+      const j = i + dir
+      const other = ordered[j]
+      if (!other || other.busy !== busy) return
+      Store.swapEpicOrder(epic.id, other.epic.id)
+      render()
+    }
+    const canMove = (dir) => {
+      const other = ordered[i + dir]
+      return !!other && other.busy === busy
+    }
+
     const section = h('section', { class: 'epic' },
       h('div', { class: 'epic-head' },
         h('span', { class: 'epic-idx' }, String(i + 1).padStart(2, '0')),
@@ -950,7 +1231,21 @@ function renderDay() {
         epicFolderButton(epic),
         h('span', { class: 'epic-rule' }),
         h('span', { class: 'epic-count' }, tasks.length ? `${done}/${tasks.length}` : ''),
-        epicHoursControl(epic)
+        epicHoursControl(epic),
+        h('div', { class: 'acts' },
+          h('button', {
+            class: 'act',
+            title: 'Move epic up',
+            disabled: !canMove(-1),
+            onclick: () => move(-1)
+          }, '▲'),
+          h('button', {
+            class: 'act',
+            title: 'Move epic down',
+            disabled: !canMove(1),
+            onclick: () => move(1)
+          }, '▼')
+        )
       )
     )
 
@@ -977,6 +1272,10 @@ function renderDay() {
   })
 
   if (!shown) pane.append(h('div', { class: 'empty' }, 'no tasks on this day'))
+
+  // Always last, and only where it can be acted on: a past day is a record.
+  if (editable) pane.append(backlogSection())
+
   return pane
 }
 
@@ -1010,24 +1309,28 @@ function renderSidebar() {
     if (epic.folder) {
       const btn = h('button', {
         class: 'side-file',
-        onclick: () => openTarget(epic.folder)
+        onclick: openOrReveal(epic.folder),
+        oncontextmenu: (e) => pathMenu(e, epic.folder, [
+          { label: 'change folder…', onPick: () => pickEpicFolder(epic.id) }
+        ])
       },
         '▸ ' + shortPath(epic.folder),
         h('span', { class: 'side-sub' }, 'epic folder')
       )
-      bindTip(btn, epic.folder)
+      bindTip(btn, `${epic.folder} · ctrl+click reveals`)
       group.append(btn)
     }
 
     for (const link of mine) {
       const btn = h('button', {
         class: 'side-file',
-        onclick: () => openTarget(link.path)
+        onclick: openOrReveal(link.path),
+        oncontextmenu: (e) => pathMenu(e, link.path)
       },
         link.name,
         h('span', { class: 'side-sub' }, `${link.date} · ${link.taskTitle || 'untitled'}`)
       )
-      bindTip(btn, link.path)
+      bindTip(btn, `${link.path} · ctrl+click reveals`)
       group.append(btn)
     }
 
@@ -1069,7 +1372,8 @@ function closeSearch() {
 function jumpToTask(task) {
   closeSearch()
   App.view = 'day'
-  goDate(task.date)
+  // a parked task belongs to no day; the backlog itself only shows from today on
+  goDate(task.backlog ? Store.today() : task.date)
   requestAnimationFrame(() => {
     const row = $view.querySelector(`[data-task="${CSS.escape(task.id)}"]`)
     if (!row) return
@@ -1095,8 +1399,8 @@ function jumpToEpic(epic) {
   })
 }
 
-function resultRow(kind, label, sub, onPick) {
-  return h('button', { class: 'sr', onclick: onPick },
+function resultRow(kind, label, sub, onPick, onMenu) {
+  return h('button', { class: 'sr', onclick: onPick, oncontextmenu: onMenu },
     h('span', { class: 'sr-kind' }, kind),
     h('span', { class: 'sr-main' }, label),
     h('span', { class: 'sr-sub' }, sub || '')
@@ -1131,9 +1435,14 @@ function renderSearch() {
     $searchPanel.append(h('div', { class: 'sr-head' }, 'tasks'))
     for (const r of res.tasks) {
       const marks = [r.task.done ? '✓' : '', r.task.carriedTo ? '↷' : ''].filter(Boolean).join(' ')
+      const kind = r.task.backlog
+        ? 'BKLG'
+        : r.task.date === Store.today()
+          ? 'TODAY'
+          : r.task.date.slice(5)
       $searchPanel.append(
         resultRow(
-          r.task.date === Store.today() ? 'TODAY' : r.task.date.slice(5),
+          kind,
           r.task.title || 'untitled',
           [r.epicName, r.excerpt, marks].filter(Boolean).join('  ·  '),
           () => jumpToTask(r.task)
@@ -1146,7 +1455,13 @@ function renderSearch() {
     $searchPanel.append(h('div', { class: 'sr-head' }, 'files'))
     for (const f of res.files) {
       $searchPanel.append(
-        resultRow(f.isFolder ? 'DIR' : '@', f.name, f.sub, () => { closeSearch(); openTarget(f.path) })
+        resultRow(
+          f.isFolder ? 'DIR' : '@',
+          f.name,
+          f.sub,
+          (e) => { closeSearch(); openOrReveal(f.path)(e) },
+          (e) => pathMenu(e, f.path)
+        )
       )
     }
   }
@@ -1384,6 +1699,42 @@ const Notes = (() => {
     updateMention()
   }
 
+  /* ---------- word boundaries ----------
+     Backspace and Delete are handled by hand (below), so the browser's own
+     ctrl+delete never runs. These rebuild it over the flat model string. A
+     deletion stops at the line break rather than crossing it; when the caret
+     already sits on one, the break itself is what goes. */
+
+  const WORD = /[\p{L}\p{N}_]/u
+  const BLANK = /[^\S\n]/ // space or tab, never a newline
+
+  function wordStartBefore(text, c) {
+    let i = c
+    if (text[i - 1] === '\n') return i - 1
+    while (i > 0 && BLANK.test(text[i - 1])) i -= 1
+    if (i > 0 && text[i - 1] !== '\n') {
+      // one run of the same kind: letters/digits, or a stretch of punctuation
+      const word = WORD.test(text[i - 1])
+      while (i > 0 && !BLANK.test(text[i - 1]) && text[i - 1] !== '\n' && WORD.test(text[i - 1]) === word) {
+        i -= 1
+      }
+    }
+    return i
+  }
+
+  function wordEndAfter(text, c) {
+    let i = c
+    if (text[i] === '\n') return i + 1
+    if (i < text.length && !BLANK.test(text[i])) {
+      const word = WORD.test(text[i])
+      while (i < text.length && !BLANK.test(text[i]) && text[i] !== '\n' && WORD.test(text[i]) === word) {
+        i += 1
+      }
+    }
+    while (i < text.length && BLANK.test(text[i])) i += 1
+    return i
+  }
+
   function onKeydown(e) {
     if (!$pop.hidden) {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveMention(1); return }
@@ -1409,7 +1760,8 @@ const Notes = (() => {
       if (c > 0) {
         e.preventDefault()
         const text = serialize()
-        setModel(text.slice(0, c - 1) + text.slice(c), c - 1)
+        const from = e.ctrlKey ? wordStartBefore(text, c) : c - 1
+        setModel(text.slice(0, from) + text.slice(c), from)
         updateMention()
       }
       return
@@ -1419,7 +1771,8 @@ const Notes = (() => {
       const text = serialize()
       if (c < text.length) {
         e.preventDefault()
-        setModel(text.slice(0, c) + text.slice(c + 1), c)
+        const to = e.ctrlKey ? wordEndAfter(text, c) : c + 1
+        setModel(text.slice(0, c) + text.slice(to), c)
         updateMention()
       }
     }
@@ -1653,9 +2006,17 @@ function renderCal() {
   const [y, m] = ym.split('-').map(Number)
   const pane = h('div', { class: 'pane' })
 
+  // paging the month takes the week under review with it, so the marked week is
+  // always one of the ones on screen
+  const goMonth = (delta) => {
+    App.calMonth = monthShift(ym, delta)
+    App.calWeek = Store.weekStart(`${App.calMonth}-01`)
+    render()
+  }
+
   const head = h('div', { class: 'cal-head' },
-    h('button', { class: 'sq', title: 'Previous month', onclick: () => { App.calMonth = monthShift(ym, -1); render() } }, '◀'),
-    h('button', { class: 'sq', title: 'Next month', onclick: () => { App.calMonth = monthShift(ym, 1); render() } }, '▶'),
+    h('button', { class: 'sq', title: 'Previous month', onclick: () => goMonth(-1) }, '◀'),
+    h('button', { class: 'sq', title: 'Next month', onclick: () => goMonth(1) }, '▶'),
     h('span', { class: 'cal-title' }, `${MON[m - 1]} ${y}`),
     h('span', { class: 'cal-spacer' }),
     h('span', { class: 'cal-legend' }, 'hours / tasks done')
@@ -1663,6 +2024,7 @@ function renderCal() {
   pane.append(head)
 
   const grid = h('div', { class: 'cal-grid' })
+  grid.append(h('div', { class: 'cal-dow' }, 'wk'))
   for (const d of ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']) {
     grid.append(h('div', { class: 'cal-dow' }, d))
   }
@@ -1672,49 +2034,78 @@ function renderCal() {
   const lead = (firstOfMonth.getDay() + 6) % 7
   const daysInMonth = new Date(y, m, 0).getDate()
 
-  for (let i = 0; i < lead; i++) grid.append(h('div', { class: 'cal-cell is-blank' }))
+  // One flat list of slots, padded at both ends, so every row is a whole week
+  // and can carry a week marker of its own.
+  const slots = []
+  for (let i = 0; i < lead; i++) slots.push(null)
+  for (let day = 1; day <= daysInMonth; day++) {
+    slots.push(`${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`)
+  }
+  while (slots.length % 7) slots.push(null)
 
   let monthHours = 0
   let monthDone = 0
   let workedDays = 0
 
-  for (let day = 1; day <= daysInMonth; day++) {
-    const date = `${y}-${String(m).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    const stats = Store.dayStats(date)
-    const dow = new Date(y, m - 1, day).getDay()
+  for (let r = 0; r < slots.length; r += 7) {
+    const row = slots.slice(r, r + 7)
+    const monday = Store.weekStart(row.find(Boolean))
+    const wk = Store.rangeStats(monday, Store.addDays(monday, 6))
 
-    monthHours += stats.hours
-    monthDone += stats.done
-    if (stats.hours > 0) workedDays += 1
-
-    const cell = h('button', {
-      class: [
-        'cal-cell',
-        dow === 0 || dow === 6 ? 'is-weekend' : '',
-        date === t ? 'is-today' : '',
-        date === App.date ? 'is-sel' : '',
-        date > t ? 'is-future' : ''
-      ].filter(Boolean).join(' '),
-      onclick: () => {
-        App.view = 'day'
-        goDate(date)
-      }
+    const wkBtn = h('button', {
+      class: `cal-wk${monday === App.calWeek ? ' is-sel' : ''}`,
+      onclick: () => { App.calWeek = monday; render() }
     },
-      h('span', { class: 'cal-num' }, String(day).padStart(2, '0')),
-      h('div', { class: 'cal-body' },
-        stats.total
-          ? h('div', { class: 'cal-pips' },
-              Array.from({ length: Math.min(stats.total, 12) }, (_, i) =>
-                h('span', { class: `pip${i < stats.done ? ' is-done' : ''}` })
-              )
-            )
-          : null,
-        stats.hours > 0 ? h('span', { class: 'cal-hours' }, `${hh(stats.hours)}h`) : null
-      )
+      h('span', { class: 'cal-wk-n' }, `w${Store.isoWeek(monday)}`),
+      wk.hours > 0 ? h('span', { class: 'cal-wk-h' }, hm(wk.hours)) : null
     )
+    bindTip(wkBtn, `week of ${monday} — ${hm(wk.hours)}h, ${wk.done} completed`)
+    grid.append(wkBtn)
 
-    if (stats.total) bindTip(cell, `${hh(stats.hours)}h / ${stats.done} of ${stats.total} completed`)
-    grid.append(cell)
+    for (const date of row) {
+      if (!date) {
+        grid.append(h('div', { class: 'cal-cell is-blank' }))
+        continue
+      }
+
+      const stats = Store.dayStats(date)
+      const dow = Store.parse(date).getDay()
+      const day = +date.slice(8)
+
+      monthHours += stats.hours
+      monthDone += stats.done
+      if (stats.hours > 0) workedDays += 1
+
+      const cell = h('button', {
+        class: [
+          'cal-cell',
+          dow === 0 || dow === 6 ? 'is-weekend' : '',
+          monday === App.calWeek ? 'is-wk' : '',
+          date === t ? 'is-today' : '',
+          date === App.date ? 'is-sel' : '',
+          date > t ? 'is-future' : ''
+        ].filter(Boolean).join(' '),
+        onclick: () => {
+          App.view = 'day'
+          goDate(date)
+        }
+      },
+        h('span', { class: 'cal-num' }, String(day).padStart(2, '0')),
+        h('div', { class: 'cal-body' },
+          stats.total
+            ? h('div', { class: 'cal-pips' },
+                Array.from({ length: Math.min(stats.total, 12) }, (_, i) =>
+                  h('span', { class: `pip${i < stats.done ? ' is-done' : ''}` })
+                )
+              )
+            : null,
+          stats.hours > 0 ? h('span', { class: 'cal-hours' }, `${hm(stats.hours)}h`) : null
+        )
+      )
+
+      if (stats.total) bindTip(cell, `${hm(stats.hours)}h / ${stats.done} of ${stats.total} completed`)
+      grid.append(cell)
+    }
   }
 
   pane.append(grid)
@@ -1723,7 +2114,7 @@ function renderCal() {
     h('div', { class: 'cal-sum' },
       h('div', { class: 'sum-item' },
         h('span', { class: 'sum-k' }, 'hours this month'),
-        h('span', { class: 'sum-v' }, `${hh(monthHours)}h`)
+        h('span', { class: 'sum-v' }, `${hm(monthHours)}h`)
       ),
       h('div', { class: 'sum-item' },
         h('span', { class: 'sum-k' }, 'days with entries'),
@@ -1735,12 +2126,173 @@ function renderCal() {
       ),
       h('div', { class: 'sum-item' },
         h('span', { class: 'sum-k' }, 'average per active day'),
-        h('span', { class: 'sum-v' }, workedDays ? `${hh(monthHours / workedDays)}h` : '—')
+        h('span', { class: 'sum-v' }, workedDays ? `${hm(monthHours / workedDays)}h` : '—')
       )
     )
   )
 
+  pane.append(weekReview())
+
   return pane
+}
+
+/* ---------- week review ----------
+   The month grid says how much; this says what. Reviewing a week means reading
+   back what was actually finished, epic by epic, and seeing what it left open. */
+
+function weekLabel(monday) {
+  const sunday = Store.addDays(monday, 6)
+  const d1 = Store.parse(monday)
+  const d2 = Store.parse(sunday)
+  const part = (d) => `${MON[d.getMonth()]} ${String(d.getDate()).padStart(2, '0')}`
+  return `${part(d1)} — ${part(d2)}`
+}
+
+function weekToText(monday) {
+  const sunday = Store.addDays(monday, 6)
+  const stats = Store.rangeStats(monday, sunday)
+  const lines = []
+
+  lines.push(`WEEK ${Store.isoWeek(monday)}  ·  ${monday} → ${sunday}`)
+  lines.push('='.repeat(46))
+  lines.push(
+    `${hm(stats.hours)}h  ·  ${stats.done} completed  ·  ${stats.active} active day(s)`
+  )
+
+  const done = Store.tasksDoneBetween(monday, sunday)
+  for (const epic of Store.epicsSorted()) {
+    const mine = done.filter((k) => k.epicId === epic.id)
+    if (!mine.length) continue
+    const sum = mine.reduce((s, k) => s + (k.hours || 0), 0)
+    lines.push('')
+    lines.push(`${epic.name}  —  ${hm(sum)}h`)
+    for (const k of mine) {
+      lines.push(`    [x] ${k.title || 'untitled'}  (${k.doneDate.slice(5)}, ${hm(k.hours)}h)`)
+    }
+  }
+  if (!done.length) {
+    lines.push('')
+    lines.push('nothing was completed this week.')
+  }
+
+  const open = Store.tasksOpenBetween(monday, sunday)
+  if (open.length) {
+    lines.push('')
+    lines.push('-'.repeat(46))
+    lines.push('STILL OPEN')
+    for (const k of open) {
+      lines.push(`    [ ] ${k.title || 'untitled'}  (${k.date.slice(5)})`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function weekReview() {
+  const monday = App.calWeek
+  const sunday = Store.addDays(monday, 6)
+  const stats = Store.rangeStats(monday, sunday)
+  const done = Store.tasksDoneBetween(monday, sunday)
+  const open = Store.tasksOpenBetween(monday, sunday)
+
+  const shift = (delta) => { App.calWeek = Store.addDays(monday, delta * 7); render() }
+
+  const box = h('section', { class: 'wk' },
+    h('div', { class: 'wk-head' },
+      h('button', { class: 'sq', title: 'Previous week', onclick: () => shift(-1) }, '◀'),
+      h('button', { class: 'sq', title: 'Next week', onclick: () => shift(1) }, '▶'),
+      h('span', { class: 'wk-title' }, `week ${Store.isoWeek(monday)}`),
+      h('span', { class: 'wk-range' }, weekLabel(monday)),
+      h('span', { class: 'cal-spacer' }),
+      h('button', {
+        class: 'add-btn',
+        title: 'Copy this review as text',
+        onclick: async () => { await window.api.io.copy(weekToText(monday)); toast('week copied') }
+      }, 'copy')
+    ),
+
+    h('div', { class: 'cal-sum' },
+      h('div', { class: 'sum-item' },
+        h('span', { class: 'sum-k' }, 'hours'),
+        h('span', { class: 'sum-v' }, `${hm(stats.hours)}h`)
+      ),
+      h('div', { class: 'sum-item' },
+        h('span', { class: 'sum-k' }, 'tasks completed'),
+        h('span', { class: 'sum-v' }, String(stats.done))
+      ),
+      h('div', { class: 'sum-item' },
+        h('span', { class: 'sum-k' }, 'active days'),
+        h('span', { class: 'sum-v' }, String(stats.active))
+      ),
+      h('div', { class: 'sum-item' },
+        h('span', { class: 'sum-k' }, 'average per active day'),
+        h('span', { class: 'sum-v' }, stats.active ? `${hm(stats.hours / stats.active)}h` : '—')
+      )
+    )
+  )
+
+  // the shape of the week at a glance, before reading any of it
+  const strip = h('div', { class: 'wk-days' })
+  stats.days.forEach((d, i) => {
+    const cell = h('button', {
+      class: `wk-day${d.date === App.date ? ' is-sel' : ''}${d.hours > 0 ? '' : ' is-idle'}`,
+      onclick: () => { App.view = 'day'; goDate(d.date) }
+    },
+      h('span', { class: 'wk-dow' }, ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][i]),
+      h('span', { class: 'wk-day-h' }, d.hours > 0 ? `${hm(d.hours)}h` : '—'),
+      h('span', { class: 'wk-day-n' }, d.total ? `${d.done}/${d.total}` : '')
+    )
+    bindTip(cell, `${d.date} — ${hm(d.hours)}h, ${d.done} of ${d.total} completed`)
+    strip.append(cell)
+  })
+  box.append(strip)
+
+  box.append(h('div', { class: 'wk-sec' }, `completed · ${done.length}`))
+  if (!done.length) {
+    box.append(h('div', { class: 'bklg-empty' }, 'nothing was completed this week'))
+  } else {
+    for (const epic of Store.epicsSorted()) {
+      const mine = done.filter((k) => k.epicId === epic.id)
+      if (!mine.length) continue
+      const sum = mine.reduce((s, k) => s + (k.hours || 0), 0)
+      box.append(
+        h('div', { class: 'wk-epic' },
+          h('span', { class: 'wk-epic-name' }, epic.name),
+          h('span', { class: 'epic-rule' }),
+          h('span', { class: 'epic-hours' }, h('b', null, hm(sum)), 'h')
+        )
+      )
+      for (const task of mine) {
+        box.append(
+          h('button', { class: 'wk-task', onclick: () => jumpToTask(task) },
+            h('span', { class: 'wk-tick' }, '✓'),
+            h('span', { class: 'wk-task-name' }, task.title || 'untitled'),
+            h('span', { class: 'leader' }),
+            h('span', { class: 'wk-task-day' }, DOW[Store.parse(task.doneDate).getDay()]),
+            h('span', { class: 'wk-task-h' }, task.hours ? `${hm(task.hours)}h` : '')
+          )
+        )
+      }
+    }
+  }
+
+  if (open.length) {
+    box.append(h('div', { class: 'wk-sec' }, `left open · ${open.length}`))
+    for (const task of open) {
+      const epic = Store.epicById(task.epicId)
+      box.append(
+        h('button', { class: 'wk-task is-open', onclick: () => jumpToTask(task) },
+          h('span', { class: 'wk-tick' }, '·'),
+          h('span', { class: 'wk-task-name' }, task.title || 'untitled'),
+          h('span', { class: 'leader' }),
+          h('span', { class: 'wk-task-day' }, epic ? epic.name : ''),
+          h('span', { class: 'wk-task-h' }, task.date.slice(5))
+        )
+      )
+    }
+  }
+
+  return box
 }
 
 /* ============================================================
@@ -1803,8 +2355,9 @@ function renderTpl() {
         epic.folder
           ? h('button', {
               class: 'folder-btn',
-              title: `${epic.folder}\n(clique para abrir)`,
-              onclick: () => openTarget(epic.folder)
+              title: `${epic.folder}\nclick to open · ctrl+click to reveal in explorer`,
+              onclick: openOrReveal(epic.folder),
+              oncontextmenu: (e) => pathMenu(e, epic.folder)
             }, '▸', h('span', { class: 'folder-path' }, shortPath(epic.folder)))
           : null,
         h('button', {
@@ -1819,7 +2372,7 @@ function renderTpl() {
               onclick: () => { Store.updateEpic(epic.id, { folder: null }); render() }
             }, '✕')
           : null,
-        h('span', { class: 'epic-hours' }, h('b', null, hh(sum)), 'h'),
+        h('span', { class: 'epic-hours' }, h('b', null, hm(sum)), 'h'),
         h('div', { class: 'acts', style: 'opacity:1' },
           h('button', { class: 'act', title: 'Move up', onclick: () => { Store.moveEpic(epic.id, -1); render() } }, '▲'),
           h('button', { class: 'act', title: 'Move down', onclick: () => { Store.moveEpic(epic.id, 1); render() } }, '▼'),
@@ -1864,20 +2417,20 @@ function renderTpl() {
           h('div', { class: 'hours' },
             h('input', {
               class: 'hours-in',
-              type: 'number',
-              step: '0.5',
-              min: '0',
-              max: '24',
-              value: num(item.defaultHours),
+              type: 'text',
+              inputmode: 'numeric',
+              value: hm(item.defaultHours),
               'data-fk': `tplh:${item.id}`,
-              title: 'Suggested hours (reference only)',
+              title: `Suggested hours (reference only)\n${TIME_HINT}`,
+              onfocus: (e) => e.target.select(),
               oninput: (e) => {
-                const v = parseFloat(e.target.value)
+                const v = snapHours(parseHM(e.target.value))
                 Store.commit((s) => {
                   const x = s.templateItems.find((k) => k.id === item.id)
-                  if (x) x.defaultHours = Number.isFinite(v) ? Math.min(24, Math.max(0, v)) : 0
+                  if (x) x.defaultHours = v
                 }, { silent: true })
-              }
+              },
+              onblur: (e) => { e.target.value = hm(snapHours(parseHM(e.target.value))) }
             }),
             h('span', { class: 'hours-unit' }, 'h')
           ),
@@ -1943,7 +2496,7 @@ function goDate(date) {
   // Landing on a future day builds it from the template so it can be planned.
   Store.planDay(date)
   App.date = date
-  App.calMonth = date.slice(0, 7)
+  syncCalTo(date)
   render()
 }
 
@@ -1975,8 +2528,8 @@ const bumpTarget = (delta) => {
   Store.setDayTarget((Store.state.dayTargetHours || 8) + delta)
   renderMeter()
 }
-document.getElementById('target-minus').onclick = () => bumpTarget(-0.5)
-document.getElementById('target-plus').onclick = () => bumpTarget(0.5)
+document.getElementById('target-minus').onclick = () => bumpTarget(-QUARTER)
+document.getElementById('target-plus').onclick = () => bumpTarget(QUARTER)
 
 function isTyping(el) {
   return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
@@ -2022,41 +2575,53 @@ function restoreTheme() {
 
 document.getElementById('theme-toggle').onclick = toggleTheme
 
-/* ---------- zoom ---------- */
+/* ---------- text size ----------
+   This resizes the content only, never the window. Scaling the whole frame the
+   way webFrame zoom does moves the header, which means A− and A+ slide out from
+   under the pointer between clicks — the one thing a repeat-click button must
+   never do. */
 
 const ZOOM_STEPS = [0.7, 0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8]
-const ZOOM_KEY = 'tt.zoom'
+const ZOOM_KEY = 'tt.fs'
+const LEGACY_ZOOM_KEY = 'tt.zoom' // the old whole-window factor
+
+let fontScale = 1
 
 function applyZoom(factor) {
-  window.api.zoom.set(factor)
+  fontScale = factor
+  document.documentElement.style.setProperty('--fs-scale', String(factor))
   localStorage.setItem(ZOOM_KEY, String(factor))
 }
 
 function stepZoom(dir) {
-  const current = window.api.zoom.get()
   // land on the nearest defined step, then move one notch
   let i = ZOOM_STEPS.reduce(
-    (best, v, idx) => (Math.abs(v - current) < Math.abs(ZOOM_STEPS[best] - current) ? idx : best),
+    (best, v, idx) =>
+      Math.abs(v - fontScale) < Math.abs(ZOOM_STEPS[best] - fontScale) ? idx : best,
     0
   )
   i = Math.min(ZOOM_STEPS.length - 1, Math.max(0, i + dir))
   applyZoom(ZOOM_STEPS[i])
-  toast(`zoom ${Math.round(ZOOM_STEPS[i] * 100)}%`)
+  toast(`text ${Math.round(ZOOM_STEPS[i] * 100)}%`)
 }
 
 function restoreZoom() {
-  const saved = parseFloat(localStorage.getItem(ZOOM_KEY))
-  if (Number.isFinite(saved) && saved > 0) window.api.zoom.set(saved)
+  // an earlier version left a factor on the frame itself; clear it once
+  window.api.zoom.set(1)
+  const saved = parseFloat(
+    localStorage.getItem(ZOOM_KEY) ?? localStorage.getItem(LEGACY_ZOOM_KEY)
+  )
+  applyZoom(Number.isFinite(saved) && saved > 0 ? saved : 1)
 }
 
 document.addEventListener('keydown', (e) => {
   const typing = isTyping(document.activeElement)
 
-  // zoom — works everywhere, including while typing
+  // text size — works everywhere, including while typing
   if (e.ctrlKey || e.metaKey) {
     if (e.key === '+' || e.key === '=') { e.preventDefault(); stepZoom(1); return }
     if (e.key === '-' || e.key === '_') { e.preventDefault(); stepZoom(-1); return }
-    if (e.key === '0') { e.preventDefault(); applyZoom(1); toast('zoom 100%'); return }
+    if (e.key === '0') { e.preventDefault(); applyZoom(1); toast('text 100%'); return }
     if (e.key.toLowerCase() === 'e') { e.preventDefault(); ioDialog(); return }
     if (e.key.toLowerCase() === 'f') { e.preventDefault(); openSearch(); return }
     if (e.key.toLowerCase() === 'j') { e.preventDefault(); Notes.toggle(); return }
@@ -2133,7 +2698,7 @@ function checkRollover() {
   const result = Store.generateIfNeeded()
   if (wasOnToday) {
     App.date = t
-    App.calMonth = t.slice(0, 7)
+    syncCalTo(t)
   }
   render()
 
@@ -2153,7 +2718,7 @@ function installDevHelpers() {
     const result = Store.generateIfNeeded()
     knownToday = Store.today()
     App.date = Store.today()
-    App.calMonth = App.date.slice(0, 7)
+    syncCalTo(App.date)
     render()
     return result || 'no generation (already up to date)'
   }
@@ -2163,7 +2728,7 @@ function installDevHelpers() {
     await Store.resetToSeed()
     knownToday = Store.today()
     App.date = Store.today()
-    App.calMonth = App.date.slice(0, 7)
+    syncCalTo(App.date)
     render()
     return 'reset ok'
   }
@@ -2203,7 +2768,7 @@ async function boot() {
   restoreZoom()
   const res = await Store.init()
   App.date = Store.today()
-  App.calMonth = App.date.slice(0, 7)
+  syncCalTo(App.date)
   // drop future days that were opened for planning but never written to
   Store.planDay(App.date)
   knownToday = Store.today()

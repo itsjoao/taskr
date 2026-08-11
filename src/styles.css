@@ -29,6 +29,11 @@
 
   --chrome-h: 48px;
   --meter-h: 48px;
+
+  /* A− / A+ scale the content only. If they scaled the window the way a browser
+     zoom does, the buttons would slide out from under the pointer on every
+     click, so the header and the footer are deliberately left out of it. */
+  --fs-scale: 1;
 }
 
 /* Dark theme: the same design, tuned for a warm near-black. Because the whole
@@ -283,6 +288,11 @@ main {
   padding: 0 0 28px;
 }
 
+/* the surfaces A− / A+ resize — everything else holds its size. The drawer
+   itself is position:fixed, so only its text area is scaled: zooming the shell
+   would scale its inset offsets along with it. */
+main, .sidebar, .drawer-in { zoom: var(--fs-scale); }
+
 /* The template view is a different mode, not the tracker — tint it so that
    is obvious at a glance. */
 main.is-tpl { background: var(--tpl-bg); }
@@ -415,12 +425,15 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 
 .epic-rule { flex: 1; height: 0; border-top: var(--hair-w) solid var(--hair); }
 
+/* fixed width: an epic crossing 9:45 -> 10:00 must not drag the row with it */
 .epic-hours {
   font-size: var(--fs-label);
   letter-spacing: 0.08em;
   color: var(--ink-60);
   font-variant-numeric: tabular-nums;
   flex: none;
+  min-width: 46px;
+  text-align: right;
 }
 .epic-hours b { font-weight: 600; color: var(--ink); }
 
@@ -554,7 +567,7 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 .epic-extra.has-extra .epic-extra-label { color: var(--accent); }
 
 .epic-hours-in {
-  width: 30px;
+  width: 42px;
   font: inherit;
   font-size: 12px;
   text-align: center;
@@ -598,8 +611,10 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 }
 .task:hover .hours-btn { color: var(--ink); }
 .hours-btn:hover { background: var(--ink); color: var(--bg); }
+/* Wide enough for the longest value ("10:15"), and fixed, so typing or stepping
+   never nudges the − and + buttons out from under the pointer. */
 .hours-in {
-  width: 30px;
+  width: 44px;
   font: inherit;
   font-size: 13px;
   text-align: center;
@@ -620,6 +635,7 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 /* row actions — revealed on hover, TE-style ghost controls */
 .acts { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity 80ms linear; }
 .task:hover .acts, .task.is-open .acts, .task:focus-within .acts { opacity: 1; }
+.epic-head:hover .acts, .epic-head:focus-within .acts { opacity: 1; }
 .act {
   width: 19px;
   height: 19px;
@@ -638,6 +654,46 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 .act.act-danger:hover { background: var(--accent); border-color: var(--accent); color: var(--white); }
 .act.has-content { border-color: var(--accent); color: var(--accent); }
 .act.has-content.is-on { background: var(--accent); border-color: var(--accent); color: var(--white); }
+.act:disabled { opacity: 0.25; pointer-events: none; }
+
+/* ---------- backlog: parked work, always last on the day ---------- */
+
+.epic-backlog { border-top: var(--hair-w) dashed var(--hair); margin-top: 10px; }
+.epic-backlog .epic-name { color: var(--ink-60); }
+
+.task.is-backlog .title-in { color: var(--ink-60); }
+.task.is-backlog:hover .title-in { color: var(--ink); }
+
+.bklg-mark {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  color: var(--ink-35);
+  font-size: 14px;
+}
+
+/* the epic a parked task still belongs to, without a section of its own */
+.bklg-epic {
+  flex: none;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+  border: var(--hair-w) solid var(--ink-18);
+  border-radius: var(--r);
+  padding: 1px 5px;
+}
+
+.bklg-empty {
+  padding: 6px 0 4px 27px;
+  font-size: var(--fs-label);
+  letter-spacing: 0.06em;
+  color: var(--ink-35);
+}
 
 /* response / comments fields */
 .field {
@@ -786,7 +842,28 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
   color: var(--ink-35);
 }
 
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+/* a week marker column, then the seven days */
+.cal-grid { display: grid; grid-template-columns: 40px repeat(7, 1fr); gap: 3px; }
+
+/* clicking one picks the week the review below reads back */
+.cal-wk {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 2px;
+  background: transparent;
+  border: var(--hair-w) solid transparent;
+  border-radius: var(--r);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.cal-wk:hover { border-color: var(--ink-18); }
+.cal-wk.is-sel { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.cal-wk-n { font-size: var(--fs-micro); letter-spacing: 0.06em; color: var(--ink-35); }
+.cal-wk-h { font-size: var(--fs-micro); color: var(--ink-60); }
+.cal-wk.is-sel .cal-wk-n, .cal-wk.is-sel .cal-wk-h { color: var(--bg); }
 
 .cal-dow {
   font-size: var(--fs-micro);
@@ -814,6 +891,8 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 .cal-cell:hover { border-color: var(--ink); }
 .cal-cell.is-blank { border-color: transparent; pointer-events: none; }
 .cal-cell.is-weekend { background: rgba(17, 17, 17, 0.028); }
+/* the week being reviewed below — stated before the states that outrank it */
+.cal-cell.is-wk { border-color: var(--ink-35); }
 .cal-cell.is-sel { background: var(--ink); border-color: var(--ink); color: var(--bg); }
 .cal-cell.is-future { opacity: 0.45; }
 
@@ -869,6 +948,103 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
   color: var(--ink-35);
 }
 .sum-v { font-size: 19px; font-variant-numeric: tabular-nums; }
+
+/* ---------- week review ---------- */
+
+.wk { margin-top: 26px; border-top: var(--hair-w) solid var(--line); padding-top: 12px; }
+
+.wk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.wk-title {
+  font-size: 15px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.wk-range {
+  font-size: var(--fs-label);
+  letter-spacing: 0.08em;
+  color: var(--ink-35);
+}
+
+/* the shape of the week, before reading any of it */
+.wk-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; margin: 12px 0 4px; }
+.wk-day {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 6px;
+  background: transparent;
+  border: var(--hair-w) solid var(--hair);
+  border-radius: var(--r);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.wk-day:hover { border-color: var(--ink); }
+.wk-day.is-idle { opacity: 0.5; }
+.wk-day.is-sel { border-color: var(--accent); }
+.wk-dow {
+  font-size: var(--fs-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+}
+.wk-day-h { font-size: 13px; }
+.wk-day-n { font-size: var(--fs-micro); color: var(--ink-35); }
+
+.wk-sec {
+  margin: 18px 0 6px;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+}
+
+.wk-epic { display: flex; align-items: center; gap: 8px; margin: 10px 0 2px; }
+.wk-epic-name {
+  font-size: var(--fs-label);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.wk-task {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px 3px 4px;
+  background: transparent;
+  border: none;
+  border-radius: var(--r);
+  cursor: pointer;
+  text-align: left;
+}
+.wk-task:hover { background: var(--panel); }
+.wk-tick { flex: none; width: 13px; text-align: center; color: var(--ink); }
+.wk-task.is-open .wk-tick { color: var(--ink-35); }
+.wk-task-name {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.wk-task.is-open .wk-task-name { color: var(--ink-60); }
+.wk-task-day {
+  flex: none;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-35);
+}
+.wk-task-h {
+  flex: none;
+  min-width: 42px;
+  text-align: right;
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-60);
+}
 
 /* ============================================================
    TEMPLATE VIEW
@@ -952,7 +1128,7 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 .target-val {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
-  min-width: 20px;
+  width: 34px;
   text-align: center;
 }
 .target-unit { font-size: var(--fs-micro); color: var(--ink-35); }
@@ -991,6 +1167,9 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 .seg:hover { background: var(--accent) !important; }
 .seg.is-gap { background: transparent; border: none; flex: none; width: 7px; }
 
+/* an open task holds its slot as an outline — hovering fills it like any other */
+.seg.is-open:hover { box-shadow: none; }
+
 /* marks where the target sits when the day has gone past it */
 .meter-mark {
   flex: none;
@@ -1008,7 +1187,7 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
   font-size: 17px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
-  min-width: 54px;
+  min-width: 62px;
   text-align: right;
 }
 .meter-total .unit { font-size: var(--fs-label); color: var(--ink-35); margin-left: 1px; }
@@ -1037,6 +1216,38 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
   text-align: center;
 }
 .toast.is-on { opacity: 1; transform: translate(-50%, 0); }
+
+/* right-click menu on anything that points at a path */
+.ctx {
+  position: fixed;
+  z-index: 90;
+  min-width: 168px;
+  display: flex;
+  flex-direction: column;
+  padding: 3px 0;
+  background: var(--bg);
+  border: var(--hair-w) solid var(--line);
+  border-radius: var(--r);
+}
+.ctx[hidden] { display: none; }
+
+.ctx-item {
+  text-align: left;
+  padding: 5px 12px;
+  font-size: var(--fs-label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-60);
+  white-space: nowrap;
+}
+.ctx-item:hover { background: var(--ink); color: var(--bg); }
+.ctx-item.is-danger { color: var(--accent); }
+.ctx-item.is-danger:hover { background: var(--accent); color: var(--white); }
+
+.ctx-sep { height: 0; margin: 3px 0; border-top: var(--hair-w) solid var(--hair); }
 
 /* confirm dialog */
 .modal-root {

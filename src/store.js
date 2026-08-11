@@ -38,6 +38,19 @@ const Store = (() => {
     return Math.round((parse(b) - parse(a)) / 86400000)
   }
 
+  // Weeks run Monday -> Sunday, the same way the calendar grid is laid out.
+  function weekStart(dateStr) {
+    return addDays(dateStr, -((parse(dateStr).getDay() + 6) % 7))
+  }
+
+  // ISO-8601: a week belongs to the year that holds its Thursday.
+  function isoWeek(dateStr) {
+    const thu = parse(addDays(weekStart(dateStr), 3))
+    const firstThu = parse(weekStart(`${thu.getFullYear()}-01-04`))
+    firstThu.setDate(firstThu.getDate() + 3)
+    return 1 + Math.round((thu - firstThu) / 604800000)
+  }
+
   /* ---------- ids ---------- */
 
   let idCounter = 0
@@ -119,6 +132,9 @@ const Store = (() => {
             response: typeof k.response === 'string' ? k.response : '',
             comments: typeof k.comments === 'string' ? k.comments : '',
             date: typeof k.date === 'string' ? k.date : t,
+            // parked: off the day timeline entirely, waiting to be scheduled.
+            // It keeps its date as a record of where it was parked from.
+            backlog: !!k.backlog,
             dueDate: typeof k.dueDate === 'string' && k.dueDate ? k.dueDate : null,
             createdDate: typeof k.createdDate === 'string' ? k.createdDate : (k.date || t),
             fromTemplateId: k.fromTemplateId || null,
@@ -150,6 +166,7 @@ const Store = (() => {
       response: '',
       comments: '',
       date,
+      backlog: false,
       dueDate: null,
       createdDate: date,
       fromTemplateId: item.id,
@@ -184,9 +201,10 @@ const Store = (() => {
   }
 
   // Unfinished work reaches the new day. A finished task never travels: it stays
-  // on the day it was completed, which is where it actually happened.
+  // on the day it was completed, which is where it actually happened. Parked
+  // work does not travel either — that is the whole point of parking it.
   function shouldCarry(task) {
-    return !task.done && !task.carriedTo
+    return !task.done && !task.carriedTo && !task.backlog
   }
 
   // An untouched template task: generated but never engaged with. Safe to drop or replace.
@@ -206,7 +224,13 @@ const Store = (() => {
     // a reminder, so the template still gets to lay down a fresh copy.
     const present = new Set(
       state.tasks
-        .filter((k) => k.date === date && k.fromTemplateId && (!k.done || k.doneDate === date))
+        .filter(
+          (k) =>
+            k.date === date &&
+            !k.backlog && // a parked copy has left the day; the slot is free again
+            k.fromTemplateId &&
+            (!k.done || k.doneDate === date)
+        )
         .map((k) => k.fromTemplateId)
     )
     const items = state.templateItems
@@ -265,7 +289,7 @@ const Store = (() => {
     const byDate = new Map()
 
     for (const k of state.tasks) {
-      if (k.date <= t || k.date === exceptDate) continue
+      if (k.date <= t || k.date === exceptDate || k.backlog) continue
       if (!byDate.has(k.date)) byDate.set(k.date, [])
       byDate.get(k.date).push(k)
     }
@@ -331,8 +355,14 @@ const Store = (() => {
     return state.templateItems.filter((it) => it.epicId === epicId).sort((a, b) => a.order - b.order)
   }
 
+  // Parked work is deliberately absent here, which is what keeps it out of the
+  // day list, the meter, the calendar and every hour total downstream.
   function tasksOn(date) {
-    return state.tasks.filter((k) => k.date === date)
+    return state.tasks.filter((k) => k.date === date && !k.backlog)
+  }
+
+  function backlogTasks() {
+    return state.tasks.filter((k) => k.backlog).sort((a, b) => a.order - b.order)
   }
 
   function tasksFor(epicId, date) {
@@ -382,6 +412,37 @@ const Store = (() => {
       total: list.length,
       done: list.filter((k) => k.done).length
     }
+  }
+
+  /* ---------- ranges, for the weekly review ---------- */
+
+  // What was actually finished in the period, by the day it was ticked — not by
+  // the day it was first written down.
+  function tasksDoneBetween(from, to) {
+    return state.tasks
+      .filter((k) => k.done && k.doneDate && k.doneDate >= from && k.doneDate <= to && !k.backlog)
+      .sort((a, b) => a.doneDate.localeCompare(b.doneDate) || a.order - b.order)
+  }
+
+  // What the period left behind: still open, and not already continued elsewhere
+  // (a carried task would otherwise be counted once per day it sat on).
+  function tasksOpenBetween(from, to) {
+    return state.tasks
+      .filter((k) => !k.done && !k.carriedTo && !k.backlog && k.date >= from && k.date <= to)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order)
+  }
+
+  function rangeStats(from, to) {
+    const out = { hours: 0, total: 0, done: 0, active: 0, days: [] }
+    for (let d = from; d <= to; d = addDays(d, 1)) {
+      const s = dayStats(d)
+      out.days.push({ date: d, ...s })
+      out.hours += s.hours
+      out.total += s.total
+      out.done += s.done
+      if (s.hours > 0) out.active += 1
+    }
+    return out
   }
 
   // every distinct file linked anywhere, newest task first
@@ -453,6 +514,7 @@ const Store = (() => {
         response: '',
         comments: '',
         date,
+        backlog: false,
         dueDate: null,
         createdDate: date,
         fromTemplateId: null,
@@ -493,6 +555,61 @@ const Store = (() => {
     })
   }
 
+  /* ---------- backlog ----------
+     Work that is real but not scheduled. It keeps its epic, so it is still
+     filed under the thing it belongs to, but it leaves the day timeline: no
+     hours, no carry-over, no weight in any total until it is pulled back onto
+     a day. A task is either parked or on a day, never both, so the one `order`
+     field serves whichever list it is currently in. */
+
+  function moveToBacklog(id) {
+    return commit((s) => {
+      const task = s.tasks.find((k) => k.id === id)
+      if (!task || task.backlog) return null
+      const last = s.tasks.reduce((m, k) => (k.backlog ? Math.max(m, k.order) : m), -1)
+      task.backlog = true
+      task.done = false
+      task.doneDate = null
+      task.hours = 0
+      task.order = last + 1
+      return task
+    })
+  }
+
+  function restoreFromBacklog(id, date) {
+    return commit((s) => {
+      const task = s.tasks.find((k) => k.id === id)
+      if (!task || !task.backlog) return null
+      const siblings = s.tasks.filter(
+        (k) => !k.backlog && k.epicId === task.epicId && k.date === date
+      )
+      task.backlog = false
+      task.date = date
+      // it arrives fresh: the time it spent parked is not time it rolled over,
+      // so the carry badge must not report it
+      task.createdDate = date
+      task.carriedFrom = null
+      task.carriedTo = null
+      task.done = false
+      task.doneDate = null
+      task.order = siblings.reduce((m, k) => Math.max(m, k.order), -1) + 1
+      return task
+    })
+  }
+
+  function moveBacklogTask(id, dir) {
+    return commit((s) => {
+      const list = s.tasks.filter((k) => k.backlog).sort((a, b) => a.order - b.order)
+      const i = list.findIndex((k) => k.id === id)
+      const j = i + dir
+      if (i < 0 || j < 0 || j >= list.length) return
+      list.forEach((k, idx) => (k.order = idx))
+      const tmp = list[i].order
+      list[i].order = list[j].order
+      list[j].order = tmp
+    })
+  }
+
   function addTaskLinks(id, links) {
     return commit((s) => {
       const task = s.tasks.find((k) => k.id === id)
@@ -520,7 +637,7 @@ const Store = (() => {
 
   function setDayTarget(hours) {
     return commit((s) => {
-      s.dayTargetHours = Math.min(24, Math.max(0.5, Math.round(hours * 2) / 2))
+      s.dayTargetHours = Math.min(24, Math.max(0.5, Math.round(hours * 4) / 4))
       return s.dayTargetHours
     })
   }
@@ -549,6 +666,22 @@ const Store = (() => {
       s.epics = s.epics.filter((e) => e.id !== id)
       s.templateItems = s.templateItems.filter((it) => it.epicId !== id)
       s.tasks = s.tasks.filter((k) => k.epicId !== id)
+    })
+  }
+
+  // The day view floats epics that hold work to the top, so "one step up" there
+  // is not the same neighbour as in the master list. It names both epics rather
+  // than a direction, and the caller decides who is adjacent.
+  function swapEpicOrder(idA, idB) {
+    return commit((s) => {
+      const sorted = [...s.epics].sort((a, b) => a.order - b.order)
+      sorted.forEach((e, idx) => (e.order = idx))
+      const a = s.epics.find((e) => e.id === idA)
+      const b = s.epics.find((e) => e.id === idB)
+      if (!a || !b) return
+      const tmp = a.order
+      a.order = b.order
+      b.order = tmp
     })
   }
 
@@ -674,7 +807,7 @@ const Store = (() => {
     const t = today()
     if (date <= t) return []
     return state.tasks
-      .filter((k) => k.date <= t && !k.done && !k.carriedTo)
+      .filter((k) => k.date <= t && !k.done && !k.carriedTo && !k.backlog)
       .sort((a, b) => a.order - b.order || a.createdDate.localeCompare(b.createdDate))
   }
 
@@ -761,6 +894,8 @@ const Store = (() => {
     parse,
     addDays,
     daysBetween,
+    weekStart,
+    isoWeek,
     // reads
     get state() {
       return state
@@ -769,8 +904,12 @@ const Store = (() => {
     templateItemsFor,
     tasksOn,
     tasksFor,
+    backlogTasks,
     hoursOn,
     dayStats,
+    tasksDoneBetween,
+    tasksOpenBetween,
+    rangeStats,
     epicExtra,
     setEpicExtra,
     epicTaskSum,
@@ -786,6 +925,9 @@ const Store = (() => {
     addTask,
     removeTask,
     moveTask,
+    moveToBacklog,
+    restoreFromBacklog,
+    moveBacklogTask,
     addTaskLinks,
     removeTaskLink,
     setDayTarget,
@@ -793,6 +935,7 @@ const Store = (() => {
     updateEpic,
     removeEpic,
     moveEpic,
+    swapEpicOrder,
     addTemplateItem,
     updateTemplateItem,
     removeTemplateItem,

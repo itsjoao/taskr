@@ -90,9 +90,9 @@
 
       <div class="target">
         <span class="meter-label">target</span>
-        <button class="hours-btn" id="target-minus" title="Less 0.5h">&minus;</button>
-        <span class="target-val" id="target-val">8</span><span class="target-unit">h</span>
-        <button class="hours-btn" id="target-plus" title="More 0.5h">+</button>
+        <button class="hours-btn" id="target-minus" title="Less 15 min">&minus;</button>
+        <span class="target-val" id="target-val">8:00</span><span class="target-unit">h</span>
+        <button class="hours-btn" id="target-plus" title="More 15 min">+</button>
       </div>
       <div class="meter-track" id="meter-track"></div>
       <div class="meter-total"><span id="meter-total">0</span><span class="unit">h</span></div>
@@ -132,6 +132,8 @@
   </div>
 
   <div id="note-mention" class="note-mention-pop" hidden></div>
+
+  <div id="ctx" class="ctx" hidden></div>
 
   <div id="modal-root" class="modal-root" hidden></div>
   <div id="toast" class="toast" aria-live="polite"></div>
