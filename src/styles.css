@@ -1594,6 +1594,59 @@ main.is-tpl .epic-head { background: var(--tpl-bg); }
 }
 .drawer-hint b { color: var(--accent); font-weight: 700; }
 
+/* find in the open note (Ctrl+F inside the drawer) */
+.note-find {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 1px 1px 7px;
+  border: var(--hair-w) solid var(--line);
+  border-radius: var(--r);
+}
+.note-find[hidden] { display: none; }
+.note-find .ico-find {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  fill: none;
+  stroke: var(--ink-35);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.note-find-in {
+  width: 150px;
+  padding: 3px 2px;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+  user-select: text;
+}
+.note-find-in::placeholder { color: var(--ink-35); }
+.note-find-count {
+  min-width: 32px;
+  flex: none;
+  text-align: right;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--ink-35);
+  font-variant-numeric: tabular-nums;
+}
+.note-find .sq { width: 20px; height: 20px; font-size: 7px; }
+
+/* a search hit inside the note — the note itself is untouched */
+.note-hit {
+  background: var(--ink-18);
+  color: inherit;
+  border-radius: var(--r);
+}
+.note-hit.is-on { background: var(--accent); color: var(--white); }
+/* the note was edited under the hits — they no longer point anywhere */
+.drawer-in.is-stale .note-hit { background: transparent; color: inherit; }
+
 .drawer-in {
   position: relative;
   flex: 1;

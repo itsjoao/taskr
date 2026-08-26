@@ -102,6 +102,12 @@ recentes primeiro) e a escolhida vira uma **linha de cabeçalho** `@Título` na 
 destacada em negrito com uma régua embaixo. É texto puro no `.txt` — a linha começa
 com `@`.
 
+`Ctrl+Z` desfaz e `Ctrl+Shift+Z` (ou `Ctrl+Y`) refaz dentro da nota — por trechos
+digitados, não letra a letra. Com o cursor na gaveta, `Ctrl+F` procura **dentro da nota
+aberta** em vez de abrir a busca do app: as ocorrências ficam marcadas, o contador
+mostra `atual/total`, `Enter` e `Shift+Enter` pulam de uma para a outra, e `Esc` fecha
+deixando o cursor na ocorrência.
+
 **Modo escuro (☾ no topo, ou `Ctrl+D`).** Alterna entre claro e escuro; fica salvo entre
 sessões. É o mesmo layout, num quase-preto quente.
 
@@ -141,6 +147,8 @@ Tarefas cujo épico não existe são ignoradas na mesclagem, para não criar ór
 | `Ctrl+Enter` | conclui a tarefa onde o cursor está |
 | `Ctrl+N` | nova tarefa no épico atual |
 | `Ctrl+F` ou `/` | busca |
+| `Ctrl+F` (na nota) | procura dentro da nota aberta |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | desfaz / refaz na nota |
 | `Ctrl+J` | abre / fecha as notas |
 | `Ctrl+D` | modo claro / escuro |
 | `Ctrl+E` | exportar / importar |

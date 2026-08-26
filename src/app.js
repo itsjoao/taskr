@@ -1645,11 +1645,71 @@ const Notes = (() => {
   }
 
   // Rewrite the whole note from a string and drop the caret at a known offset.
-  function setModel(text, caret) {
+  function setModel(text, caret, kind) {
     renderText(text)
     if (caret != null) setCaret(caret)
+    record(text, caret == null ? 0 : caret, kind || null)
     scheduleSave()
   }
+
+  /* ---------- undo history ----------
+     Every structural edit rebuilds the editor's DOM, and that throws the
+     browser's own undo stack away, so the note keeps one of its own: plain
+     {text, caret} snapshots. A run of the same kind of edit folds into one
+     entry, so ctrl+z steps back by a word rather than by a letter. */
+
+  const HIST_MAX = 240
+  const RUN_MS = 700
+
+  let hist = []
+  let hix = -1
+  let runKind = null
+  let runAt = 0
+
+  function resetHistory(text) {
+    hist = [{ text, caret: 0 }]
+    hix = 0
+    runKind = null
+  }
+
+  // Where the caret sat when an edit began belongs to the state it leaves.
+  function markCaret(c) {
+    if (hix >= 0 && c != null) hist[hix].caret = c
+  }
+
+  function record(text, caret, kind) {
+    const now = performance.now()
+    const top = hist[hix]
+    if (top && top.text === text) { top.caret = caret; return }
+    if (top && kind && kind === runKind && now - runAt < RUN_MS) {
+      top.text = text
+      top.caret = caret
+    } else {
+      hist.length = hix + 1
+      hist.push({ text, caret })
+      if (hist.length > HIST_MAX) hist.shift()
+      hix = hist.length - 1
+    }
+    runKind = kind
+    runAt = now
+  }
+
+  function stepHistory(dir) {
+    const next = hix + dir
+    if (next < 0 || next >= hist.length) return
+    hix = next
+    const snap = hist[hix]
+    runKind = null
+    hideMention()
+    resetFind()
+    renderText(snap.text)
+    $in.focus()
+    setCaret(snap.caret)
+    scheduleSave()
+  }
+
+  const undo = () => stepHistory(-1)
+  const redo = () => stepHistory(1)
 
   /* ---------- disk ---------- */
 
@@ -1682,6 +1742,8 @@ const Notes = (() => {
   /* ---------- editing ---------- */
 
   function onInput() {
+    // the note moved under the highlights — grey them out until the next search
+    if (findOpen()) staleFind()
     // A native edit that nested the DOM (paste, a selection delete) — flatten it.
     if ([...$in.children].some((c) => c.querySelector && c.querySelector('div, p'))) {
       setModel($in.innerText.replace(/\n$/, ''), null)
@@ -1693,8 +1755,10 @@ const Notes = (() => {
         block.classList.toggle('note-h', isHeader(t))
         if (t === '' && !block.querySelector('br')) block.append(document.createElement('br'))
       }
-      $in.classList.toggle('is-empty', serialize().trim() === '')
+      const text = serialize()
+      $in.classList.toggle('is-empty', text.trim() === '')
       scheduleSave()
+      record(text, getCaret() ?? 0, 'type')
     }
     updateMention()
   }
@@ -1736,6 +1800,17 @@ const Notes = (() => {
   }
 
   function onKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = e.key.toLowerCase()
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); undo(); return }
+      if ((k === 'z' && e.shiftKey) || k === 'y') {
+        e.preventDefault()
+        e.stopPropagation()
+        redo()
+        return
+      }
+    }
+
     if (!$pop.hidden) {
       if (e.key === 'ArrowDown') { e.preventDefault(); moveMention(1); return }
       if (e.key === 'ArrowUp') { e.preventDefault(); moveMention(-1); return }
@@ -1751,6 +1826,7 @@ const Notes = (() => {
       e.preventDefault()
       const c = getCaret()
       const text = serialize()
+      markCaret(c)
       setModel(text.slice(0, c) + '\n' + text.slice(c), c + 1)
       updateMention()
       return
@@ -1761,7 +1837,8 @@ const Notes = (() => {
         e.preventDefault()
         const text = serialize()
         const from = e.ctrlKey ? wordStartBefore(text, c) : c - 1
-        setModel(text.slice(0, from) + text.slice(c), from)
+        markCaret(c)
+        setModel(text.slice(0, from) + text.slice(c), from, 'del')
         updateMention()
       }
       return
@@ -1772,7 +1849,8 @@ const Notes = (() => {
       if (c < text.length) {
         e.preventDefault()
         const to = e.ctrlKey ? wordEndAfter(text, c) : c + 1
-        setModel(text.slice(0, c) + text.slice(to), c)
+        markCaret(c)
+        setModel(text.slice(0, c) + text.slice(to), c, 'del')
         updateMention()
       }
     }
@@ -1785,6 +1863,7 @@ const Notes = (() => {
     if (!collapsed()) { document.execCommand('insertText', false, t); return }
     const c = getCaret()
     const text = serialize()
+    markCaret(c)
     setModel(text.slice(0, c) + t + text.slice(c), c + t.length)
     updateMention()
   }
@@ -1896,6 +1975,7 @@ const Notes = (() => {
     const post = tail && !tail.startsWith('\n') ? '\n' : ''
     const caret = (head + pre + line).length
     hideMention()
+    markCaret(c)
     setModel(head + pre + line + post + tail, caret)
     $in.focus()
     setCaret(caret)
@@ -1909,7 +1989,9 @@ const Notes = (() => {
     paintPlate()
     hideMention()
     const res = await window.api.notes.read(d)
+    resetFind()
     renderText(res.text || '')
+    resetHistory(res.text || '')
     dirty = false
     setState(res.text ? '' : 'empty')
   }
@@ -1933,6 +2015,7 @@ const Notes = (() => {
 
   async function close() {
     hideMention()
+    resetFind()
     await flush()
     $drawer.classList.remove('is-open')
     $btn.classList.remove('is-active')
@@ -1965,6 +2048,151 @@ const Notes = (() => {
     document.addEventListener('mouseup', up)
   })
 
+  /* ---------- find in the note ----------
+     Ctrl+F inside the drawer searches the open note instead of the whole app.
+     Hits are painted by rebuilding the lines with a <mark> around each one;
+     serialize() reads textContent, so the note itself is never touched. */
+
+  const $find = document.getElementById('note-find')
+  const $findIn = document.getElementById('note-find-in')
+  const $findCount = document.getElementById('note-find-count')
+  const $hint = document.getElementById('drawer-hint')
+
+  let findQuery = ''
+  let findHits = []
+  let findIx = -1
+  let findFrom = 0
+
+  const findOpen = () => !$find.hidden
+
+  function findAll(text, q) {
+    const hits = []
+    if (!q) return hits
+    const low = text.toLowerCase()
+    const ql = q.toLowerCase()
+    let i = low.indexOf(ql)
+    while (i !== -1) {
+      hits.push(i)
+      i = low.indexOf(ql, i + ql.length)
+    }
+    return hits
+  }
+
+  function paintFind(text) {
+    if (!findQuery) { renderText(text); return }
+    const ql = findQuery.toLowerCase()
+    const on = findHits[findIx]
+    // repainting throws the selection away; if the caret was in here, put it back
+    const sel = getSelection()
+    const keep = sel && sel.rangeCount && $in.contains(sel.anchorNode) ? getCaret() : null
+    $in.textContent = ''
+    let start = 0
+    for (const raw of text.split('\n')) {
+      const div = h('div', { class: 'note-line' + (isHeader(raw) ? ' note-h' : '') })
+      const low = raw.toLowerCase()
+      let last = 0
+      let i = low.indexOf(ql)
+      while (i !== -1) {
+        if (i > last) div.append(document.createTextNode(raw.slice(last, i)))
+        const abs = start + i
+        div.append(
+          h('mark', { class: 'note-hit' + (abs === on ? ' is-on' : '') }, raw.slice(i, i + ql.length))
+        )
+        last = i + ql.length
+        i = low.indexOf(ql, last)
+      }
+      if (last < raw.length) div.append(document.createTextNode(raw.slice(last)))
+      if (!div.childNodes.length) div.append(document.createElement('br'))
+      $in.append(div)
+      start += raw.length + 1
+    }
+    if (!$in.children.length) $in.append(makeLine(''))
+    $in.classList.toggle('is-empty', text.trim() === '')
+    if (keep != null) setCaret(keep)
+  }
+
+  // Re-read the note, repaint the hits, land on one. dir steps hit to hit.
+  function runFind(dir) {
+    const text = serialize()
+    findQuery = $findIn.value
+    const at = findHits[findIx]
+    findHits = findAll(text, findQuery)
+    if (!findHits.length) findIx = -1
+    else {
+      let i = at == null ? -1 : findHits.indexOf(at)
+      if (i < 0) {
+        i = findHits.findIndex((pos) => pos >= findFrom)
+        if (i < 0) i = 0
+      } else if (dir) {
+        i = (i + dir + findHits.length) % findHits.length
+      }
+      findIx = i
+    }
+    $in.classList.remove('is-stale')
+    paintFind(text)
+    $findCount.textContent = findHits.length
+      ? `${findIx + 1}/${findHits.length}`
+      : findQuery ? '0/0' : ''
+    const hit = $in.querySelector('mark.is-on')
+    if (hit) hit.scrollIntoView({ block: 'nearest' })
+  }
+
+  function staleFind() {
+    $in.classList.add('is-stale')
+    $findCount.textContent = '—'
+  }
+
+  // Put the bar away without disturbing the editor — the caller renders next.
+  function resetFind() {
+    if ($find.hidden) return
+    $find.hidden = true
+    $hint.hidden = false
+    findQuery = ''
+    findHits = []
+    findIx = -1
+    $in.classList.remove('is-stale')
+  }
+
+  function closeFind() {
+    if ($find.hidden) return
+    const at = findHits[findIx]
+    resetFind()
+    renderText(serialize())
+    $in.focus()
+    setCaret(at != null ? at : findFrom)
+  }
+
+  function openFind() {
+    const inEditor = $in.contains(document.activeElement) || $in === document.activeElement
+    if (inEditor) findFrom = getCaret() ?? 0
+    if ($find.hidden) {
+      $find.hidden = false
+      $hint.hidden = true
+      findHits = []
+      findIx = -1
+      const sel = String(getSelection() || '').trim()
+      if (inEditor && sel && !sel.includes('\n')) $findIn.value = sel
+    }
+    $findIn.focus()
+    $findIn.select()
+    runFind(0)
+  }
+
+  $findIn.addEventListener('input', () => runFind(0))
+  $findIn.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runFind(e.shiftKey ? -1 : 1) }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind() }
+  })
+  document.getElementById('note-find-prev').onclick = () => { runFind(-1); $findIn.focus() }
+  document.getElementById('note-find-next').onclick = () => { runFind(1); $findIn.focus() }
+  document.getElementById('note-find-x').onclick = closeFind
+
+  $in.addEventListener('beforeinput', (e) => {
+    // the browser's undo would restore DOM this editor no longer owns
+    if (e.inputType === 'historyUndo') { e.preventDefault(); undo(); return }
+    if (e.inputType === 'historyRedo') { e.preventDefault(); redo(); return }
+    markCaret(getCaret())
+  })
   $in.addEventListener('input', onInput)
   $in.addEventListener('keydown', onKeydown)
   $in.addEventListener('paste', onPaste)
@@ -1980,6 +2208,7 @@ const Notes = (() => {
     toggle,
     close,
     flush,
+    find: openFind,
     isOpen: () => $drawer.classList.contains('is-open'),
     async boot() {
       dataDir = await window.api.dataDir()
@@ -2623,7 +2852,14 @@ document.addEventListener('keydown', (e) => {
     if (e.key === '-' || e.key === '_') { e.preventDefault(); stepZoom(-1); return }
     if (e.key === '0') { e.preventDefault(); applyZoom(1); toast('text 100%'); return }
     if (e.key.toLowerCase() === 'e') { e.preventDefault(); ioDialog(); return }
-    if (e.key.toLowerCase() === 'f') { e.preventDefault(); openSearch(); return }
+    if (e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      const inNotes =
+        Notes.isOpen() && document.activeElement && document.activeElement.closest('#drawer')
+      if (inNotes) Notes.find()
+      else openSearch()
+      return
+    }
     if (e.key.toLowerCase() === 'j') { e.preventDefault(); Notes.toggle(); return }
     if (e.key.toLowerCase() === 'd') { e.preventDefault(); toggleTheme(); return }
   }

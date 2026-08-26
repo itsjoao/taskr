@@ -114,7 +114,27 @@
         <button class="sq" id="note-next" title="Next day">&#9654;</button>
       </div>
       <span class="cal-spacer"></span>
-      <span class="drawer-hint">type <b>@</b> to link a task</span>
+      <span class="drawer-hint" id="drawer-hint">type <b>@</b> to link a task</span>
+
+      <div class="note-find" id="note-find" hidden>
+        <svg viewBox="0 0 14 14" class="ico-find">
+          <circle cx="5.8" cy="5.8" r="4" />
+          <path d="M8.8 8.8 L12.6 12.6" />
+        </svg>
+        <input
+          class="note-find-in"
+          id="note-find-in"
+          type="text"
+          placeholder="find in note"
+          spellcheck="false"
+          autocomplete="off"
+        />
+        <span class="note-find-count" id="note-find-count"></span>
+        <button class="sq" id="note-find-prev" title="Previous hit (Shift+Enter)">&#9650;</button>
+        <button class="sq" id="note-find-next" title="Next hit (Enter)">&#9660;</button>
+        <button class="sq" id="note-find-x" title="Close (Esc)">&#10005;</button>
+      </div>
+
       <button class="sq" id="note-close" title="Close (Esc)">&#10005;</button>
     </div>
     <div
