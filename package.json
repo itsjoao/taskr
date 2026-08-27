@@ -1,6 +1,6 @@
 {
   "name": "taskr",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "taskr — daily tracker with epics, editable template, calendar view and per-day notes",
   "main": "electron/main.js",
   "author": "itsjoao",
@@ -28,7 +28,8 @@
     "win": {
       "target": [
         "portable",
-        "nsis"
+        "nsis",
+        "zip"
       ],
       "icon": "build/icon.ico"
     },
